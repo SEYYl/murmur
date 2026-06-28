@@ -22,6 +22,9 @@ media/covers/*
 Thumbs.db
 *.swp
 
+# Scripts (keep)
+!scripts/
+
 # IDE
 .vscode/
 .idea/

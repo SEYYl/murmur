@@ -1,0 +1,14 @@
+{
+  "name": "Murmur",
+  "short_name": "Murmur",
+  "description": "🌙 优雅的 ASMR 音频视频自托管平台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0c",
+  "theme_color": "#a78bfa",
+  "icons": [
+    { "src": "/static/favicon-192x192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/favicon-512x512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/static/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
