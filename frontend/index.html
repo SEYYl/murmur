@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASMR</title>
+<link rel="stylesheet" href="/static/css/style.css?v=4">
+
+<style>body{background:var(--bg,#0d0d0f);color:var(--text,#e8e8ed);margin:0}</style>
+
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo" onclick="navigate()">ASMR</div>
+    <nav></nav>
+  </div>
+</header>
+
+<div class="main">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-section">
+      <h3>📂 分类</h3>
+      <div class="cat-list" id="cat-list">
+        <button class="cat-item active" data-cat="">🌐 全部</button>
+      </div>
+    </div>
+  </aside>
+  <main id="content"><div class="loading"><div class="spinner"></div></div></main>
+</div>
+
+<script src="/static/js/app.js?v=4"></script>
+</body>
+</html>

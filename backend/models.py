@@ -1,0 +1,78 @@
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, ForeignKey, Boolean
+from sqlalchemy.orm import declarative_base, relationship, Session
+from datetime import datetime, timezone
+import os
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'data', 'asmr.db')}"
+MEDIA_DIR = os.path.join(BASE_DIR, "media")
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+
+ALLOWED_EXTS = {
+    'audio': ['.mp3', '.wav', '.flac', '.ogg', '.aac', '.m4a'],
+    'video': ['.mp4', '.webm', '.mov', '.avi', '.mkv'],
+    'image': ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
+}
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Category(Base):
+    __tablename__ = "categories"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    icon = Column(String(10), default="🎵")
+    sort_order = Column(Integer, default=0)
+    posts = relationship("Post", back_populates="category")
+
+
+class Post(Base):
+    __tablename__ = "posts"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, default="")
+    file_path = Column(String(255), nullable=False)
+    file_type = Column(String(10), nullable=False)
+    file_size = Column(Integer, default=0)
+    duration = Column(Float, default=0)
+    cover_image = Column(String(255), default="")
+    category_id = Column(Integer, ForeignKey("categories.id"))
+    views = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    category = relationship("Category", back_populates="posts")
+
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
+    session = Session(bind=engine)
+    if session.query(Category).count() == 0:
+        for name, icon, order in [
+            ('耳语', '🤫', 1), ('触发音', '🎯', 2),
+            ('角色扮演', '🎭', 3), ('白噪音', '🌧️', 4),
+            ('咀嚼音', '🍽️', 5), ('冥想', '🧘', 6),
+            ('纯音乐', '🎵', 7), ('综合', '📦', 8),
+        ]:
+            session.add(Category(name=name, icon=icon, sort_order=order))
+        session.commit()
+    if not session.query(User).filter(User.username == "admin").first():
+        from backend.auth import hash_password
+        session.add(User(username="admin", password_hash=hash_password("admin123")))
+        session.commit()
+    session.close()
+
+
+def get_db():
+    session = Session(bind=engine)
+    try:
+        yield session
+    finally:
+        session.close()
