@@ -227,15 +227,20 @@ async function loadPosts() {
     const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
     const card = document.createElement('div'); card.className = 'card';
     card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',p.id); };
+    const rp = getResumePos(p.id);
     card.innerHTML = `<div class="cover">
       ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
       <div class="overlay"><div class="play">▶</div></div>
       <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
       ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
+      ${rp?`<div class="resume-badge">▶ ${dur(rp.currentTime)}</div>`:''}
     </div><div class="info">
       <h3>${esc(p.title)}</h3>
       <div class="meta"><span>👁 ${p.views}</span></div>
-      ${p.category?`<div class="tag">${p.category.icon} ${esc(p.category.name)}</div>`:''}
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+        ${p.category?`<div class="tag">${p.category.icon} ${esc(p.category.name)}</div>`:''}
+        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">＋</button>
+      </div>
     </div>`;
     grid.appendChild(card);
   }
@@ -400,6 +405,8 @@ async function renderPost() {
               <button class="video-btn" id="vvb-${pid}" onclick="event.stopPropagation();vmute('${pid}')">🔊</button>
               <input type="range" class="video-volume-slider" id="vvs-${pid}" min="0" max="1" step="0.05" value="1" oninput="event.stopPropagation();vvolume(event,'${pid}')">
             </div>
+            <span class="timer-indicator" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer;margin-right:2px" onclick="event.stopPropagation();showTimer('${pid}')">⏱ 0:00</span>
+            <button class="video-btn" onclick="event.stopPropagation();showTimer('${pid}')">⏱</button>
             <button class="video-btn video-fullscreen-btn" onclick="event.stopPropagation();vfs('${pid}')">⛶</button>
           </div>
         </div>
@@ -429,6 +436,8 @@ async function renderPost() {
         <div class="audio-btn-row">
           <button class="audio-play-btn-small" id="aps-${pid}" onclick="event.stopPropagation();atoggle('${pid}')">▶</button>
           <span id="aspd-${pid}" style="font-size:.75rem;color:var(--text3);cursor:pointer" onclick="aspeed('${pid}')">1x</span>
+          <span class="timer-indicator" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer" onclick="showTimer('${pid}')">⏱ 0:00</span>
+          <button class="audio-btn" onclick="showTimer('${pid}')">⏱</button>
           <div class="audio-volume-wrap">
             <button class="audio-btn" id="avb-${pid}" onclick="amute('${pid}')">🔊</button>
             <input type="range" class="audio-volume-slider" id="avs-${pid}" min="0" max="1" step="0.05" value="1" oninput="avolume(event,'${pid}')">
@@ -439,44 +448,49 @@ async function renderPost() {
     </div>`;
   }
 
+  // Resume position check
+  const resume = getResumePos(pid);
+
   let html = `<button class="back" onclick="navigate()">← 返回</button>
+    <div id="queue-bar" class="queue-bar"></div>
     <div class="detail">${playerHTML}
       <div class="info">
         <h1>${esc(p.title)}</h1>
         <div class="meta">
           ${p.category?`<span>${p.category.icon} ${esc(p.category.name)}</span>`:''}
-          <span>👁 ${p.views}</span>
           ${p.duration>0?`<span>⏱ ${dur(p.duration)}</span>`:''}
           ${p.file_size?`<span>📦 ${fs(p.file_size)}</span>`:''}
           <span>📅 ${dt(p.created_at)}</span>
         </div>
         ${p.description?`<div class="desc">${esc(p.description)}</div>`:''}
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-secondary" onclick="addToQueue({id:${pid},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">➕ 加入队列</button>
+        </div>
       </div>
     </div>`;
   con.innerHTML = html;
+  updateQueueBar();
 
   // Bind audio/video events
   if (isV) {
     const v = document.getElementById(`vel-${pid}`);
     if (v) {
-      v.addEventListener('timeupdate', () => vupdateUI(pid));
-      v.addEventListener('loadedmetadata', () => vupdateUI(pid));
+      v.addEventListener('timeupdate', () => { vupdateUI(pid); savePosition(pid, v.currentTime, v.duration); });
+      v.addEventListener('loadedmetadata', () => { vupdateUI(pid); if (resume && v.duration) v.currentTime = Math.min(resume.currentTime, v.duration - 5); });
       v.addEventListener('play', () => vupdateUI(pid));
       v.addEventListener('pause', () => vupdateUI(pid));
-      v.addEventListener('ended', () => vupdateUI(pid));
+      v.addEventListener('ended', () => { vupdateUI(pid); clearPosition(pid); playNext(); });
     }
-    // Show controls briefly on load
     const vov = document.getElementById(`vov-${pid}`);
     if (vov) { vov.classList.add('visible'); setTimeout(() => { if (v && !v.paused) vov.classList.remove('visible'); }, 3000); }
   } else {
     const a = document.getElementById(`ael-${pid}`);
     if (a) {
-      a.addEventListener('timeupdate', () => aupdateUI(pid));
-      a.addEventListener('loadedmetadata', () => aupdateUI(pid));
+      a.addEventListener('timeupdate', () => { aupdateUI(pid); savePosition(pid, a.currentTime, a.duration); });
+      a.addEventListener('loadedmetadata', () => { aupdateUI(pid); if (resume && a.duration) a.currentTime = Math.min(resume.currentTime, a.duration - 5); });
       a.addEventListener('play', () => aupdateUI(pid));
       a.addEventListener('pause', () => aupdateUI(pid));
-      a.addEventListener('ended', () => aupdateUI(pid));
-      // Show play overlay initially
+      a.addEventListener('ended', () => { aupdateUI(pid); clearPosition(pid); playNext(); });
       const apo = document.getElementById(`apo-${pid}`);
       if (apo) apo.style.display = 'flex';
     }
@@ -736,5 +750,125 @@ async function deleteCat(id) {
   else toast(r?.detail||'删除失败','error');
 }
 
+// ─── Sleep Timer ───
+let _timer = { active: false, remaining: 0, total: 0, id: null, interval: null };
+
+function showTimer(id) {
+  if ($('tp-bg')) return;
+  const bg = document.createElement('div'); bg.id = 'tp-bg'; bg.className = 'timer-bg';
+  bg.onclick = () => bg.remove();
+  bg.innerHTML = `<div class="timer-sheet" onclick="event.stopPropagation()">
+    <h3>⏱ 定时关闭</h3>
+    <div class="sub">播放结束后自动停止</div>
+    ${_timer.active ? `<div style="margin-bottom:16px;text-align:center"><span class="timer-active-label">⏱ 剩余 ${dur(_timer.remaining)}</span></div>` : ''}
+    <div class="timer-grid">
+      <div class="timer-opt" onclick="setTimer('${id}',900);$('tp-bg').remove()">15分钟</div>
+      <div class="timer-opt" onclick="setTimer('${id}',1800);$('tp-bg').remove()">30分钟</div>
+      <div class="timer-opt" onclick="setTimer('${id}',2700);$('tp-bg').remove()">45分钟</div>
+      <div class="timer-opt" onclick="setTimer('${id}',3600);$('tp-bg').remove()">60分钟</div>
+      <div class="timer-opt" onclick="setTimer('${id}',0);$('tp-bg').remove()">播完为止</div>
+      <div class="timer-opt" onclick="setTimer('${id}',-1);$('tp-bg').remove()">取消</div>
+    </div>
+  </div>`;
+  document.body.appendChild(bg);
+}
+
+function setTimer(id, seconds) {
+  if (_timer.interval) { clearInterval(_timer.interval); _timer.interval = null; }
+  if (seconds < 0) {
+    _timer.active = false; _timer.id = null;
+    updateTimerBtn(); return;
+  }
+  _timer.active = true;
+  _timer.remaining = seconds > 0 ? seconds : 99999;
+  _timer.total = _timer.remaining;
+  _timer.id = id;
+  _timer.interval = setInterval(() => {
+    if (_timer.remaining > 0) {
+      _timer.remaining--;
+      if (_timer.remaining <= 0) {
+        clearInterval(_timer.interval); _timer.interval = null; _timer.active = false;
+        const a = $(`ael-${id}`), v = $(`vel-${id}`);
+        if (a) a.pause(); if (v) v.pause();
+        updateTimerBtn();
+        toast('⏱ 定时播放已结束', 'info');
+      }
+      updateTimerBtn();
+    }
+  }, 1000);
+  updateTimerBtn();
+}
+
+function updateTimerBtn() {
+  document.querySelectorAll('.timer-indicator').forEach(el => {
+    if (_timer.active && _timer.remaining > 0) {
+      el.textContent = `⏱ ${dur(_timer.remaining)}`;
+      el.style.display = 'inline-flex';
+    } else el.style.display = 'none';
+  });
+}
+
+// ─── Playback Position ───
+const PP_KEY = 'murmur_pp';
+function getPositions() {
+  try { return JSON.parse(localStorage.getItem(PP_KEY) || '{}'); } catch { return {}; }
+}
+function savePosition(id, ct, dur) {
+  if (!ct || !dur || dur < 10) return;
+  const p = getPositions(); p[id] = { currentTime: ct, duration: dur, updatedAt: Date.now() };
+  const keys = Object.keys(p);
+  if (keys.length > 50) {
+    keys.sort((a, b) => p[b].updatedAt - p[a].updatedAt).slice(50).forEach(k => delete p[k]);
+  }
+  localStorage.setItem(PP_KEY, JSON.stringify(p));
+}
+function clearPosition(id) {
+  const p = getPositions(); delete p[id]; localStorage.setItem(PP_KEY, JSON.stringify(p));
+}
+function getResumePos(id) {
+  const p = getPositions()[id];
+  if (!p || p.currentTime < 15 || (p.duration > 0 && p.currentTime / p.duration > 0.95)) {
+    if (p) clearPosition(id);
+    return null;
+  }
+  return p;
+}
+
+// ─── Play Queue ───
+const Q_KEY = 'murmur_queue';
+let _playQueue = [];
+function loadQueue() {
+  try { _playQueue = JSON.parse(localStorage.getItem(Q_KEY) || '[]'); } catch { _playQueue = []; }
+}
+function saveQueue() { localStorage.setItem(Q_KEY, JSON.stringify(_playQueue)); }
+function addToQueue(item) {
+  if (_playQueue.some(q => q.id === item.id)) return;
+  _playQueue.push(item); saveQueue(); updateQueueBar();
+  toast('➕ 已加入播放队列', 'info');
+}
+function removeFromQueue(id) {
+  _playQueue = _playQueue.filter(q => q.id !== id);
+  saveQueue(); updateQueueBar();
+}
+function playNext() {
+  document.querySelector('.queue-item.active')?.classList.remove('active');
+  if (!_playQueue.length) return;
+  const next = _playQueue.shift(); saveQueue();
+  navigate('post', next.id); updateQueueBar();
+}
+function updateQueueBar() {
+  const bar = $('queue-bar');
+  if (!bar) return;
+  bar.innerHTML = _playQueue.length
+    ? _playQueue.map(q => `<div class="queue-item" onclick="rmFromQ(${q.id})">${q.file_type==='video'?'🎬':'🎵'} ${esc(q.title)}</div>`).join('')
+    : '<span style="color:var(--text3);font-size:.75rem">队列为空</span>';
+  if (state.postId) {
+    const active = bar.querySelector(`[onclick*="${state.postId}"]`);
+    if (active) active.classList.add('active');
+  }
+}
+function rmFromQ(id) { removeFromQueue(id); }
+
 // ─── Init ───
+loadQueue();
 document.addEventListener('DOMContentLoaded', () => { checkAuth(); loadCats(); navigate('home'); });
