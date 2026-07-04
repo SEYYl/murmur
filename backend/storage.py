@@ -45,6 +45,14 @@ class StorageBackend(ABC):
     def abs_path(self, path: str) -> str:
         """Return the absolute local path if available (for ffmpeg/ffprobe)."""
 
+    @abstractmethod
+    def presigned_url(self, path: str, expires: int = 3600) -> str:
+        """Return a URL that grants temporary read access to the file."""
+
+    @abstractmethod
+    def backend_name(self) -> str:
+        """Return backend identifier: 'local' or 's3'."""
+
 
 class LocalStorage(StorageBackend):
     """Local filesystem storage backend.
@@ -106,6 +114,15 @@ class LocalStorage(StorageBackend):
 
     def abs_path(self, path: str) -> str:
         return self._full(path)
+
+    def presigned_url(self, path: str, expires: int = 3600) -> str:
+        # Local backend serves directly via /media/* routes; no presigning needed.
+        if not path.startswith("media/"):
+            path = f"media/{path}"
+        return path
+
+    def backend_name(self) -> str:
+        return "local"
 
 
 class S3Storage(StorageBackend):
@@ -186,6 +203,17 @@ class S3Storage(StorageBackend):
         # S3 has no local absolute path; ffmpeg operations would need a local
         # download. Callers using ffmpeg should fall back to LocalStorage.
         raise NotImplementedError("S3 backend does not expose a local absolute path")
+
+    def presigned_url(self, path: str, expires: int = 3600) -> str:
+        """Generate a presigned GET URL valid for `expires` seconds."""
+        return self._s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self._bucket, "Key": self._key(path)},
+            ExpiresIn=expires,
+        )
+
+    def backend_name(self) -> str:
+        return "s3"
 
 
 _storage_instance: Optional[StorageBackend] = None
