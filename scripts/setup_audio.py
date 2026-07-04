@@ -15,6 +15,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 MEDIA_DIR = os.path.join(ROOT_DIR, "media", "audio")
 TEST_DIR = os.path.join(ROOT_DIR, "test_content")
 TEMP_DIR = os.path.join(ROOT_DIR, "temp_audio")
+SAMPLE_DIR = os.path.join(ROOT_DIR, "sample_audio")
 
 CATEGORY_POSTS = {
     "耳语": [
@@ -238,8 +239,8 @@ def main():
             print(f"  删除: {f}")
             os.remove(fp)
     
-    print("\n=== Step 5: 生成 ASMR 音频文件 ===")
-    
+    print("\n=== Step 5: 准备 ASMR 音频文件 ===")
+
     audio_generators = {
         "耳语": [
             lambda p: generate_brown_noise(p, duration=25, amplitude=0.08),
@@ -274,20 +275,44 @@ def main():
             lambda p: generate_brown_noise(p, duration=30, amplitude=0.09),
         ],
     }
-    
+
+    sample_files = {}
+    if os.path.isdir(SAMPLE_DIR):
+        for f in os.listdir(SAMPLE_DIR):
+            if f.endswith(('.mp3', '.wav', '.m4a')):
+                sample_files[f] = os.path.join(SAMPLE_DIR, f)
+
+    def _find_sample(cat_name, idx, title):
+        for fname, fpath in sample_files.items():
+            if fname.startswith(f"{cat_name}_{idx+1}_"):
+                return fpath
+        return None
+
     generated_files = {}
     idx = 0
+    sample_count = 0
+    gen_count = 0
     for cat_name, posts in CATEGORY_POSTS.items():
         generated_files[cat_name] = []
         for i, post_info in enumerate(posts):
-            wav_path = os.path.join(TEMP_DIR, f"asmr_{idx:03d}.wav")
-            print(f"  生成 [{cat_name}] {post_info['title']}...")
-            gen_func = audio_generators[cat_name][i % len(audio_generators[cat_name])]
-            gen_func(wav_path)
-            generated_files[cat_name].append({"file": wav_path, "info": post_info})
+            sample_path = _find_sample(cat_name, i, post_info["title"])
+            if sample_path:
+                ext = os.path.splitext(sample_path)[1]
+                out_path = os.path.join(TEMP_DIR, f"asmr_{idx:03d}{ext}")
+                shutil.copy2(sample_path, out_path)
+                print(f"  使用示例 [{cat_name}] {post_info['title']} ({os.path.basename(sample_path)})")
+                sample_count += 1
+            else:
+                wav_path = os.path.join(TEMP_DIR, f"asmr_{idx:03d}.wav")
+                print(f"  生成 [{cat_name}] {post_info['title']}...")
+                gen_func = audio_generators[cat_name][i % len(audio_generators[cat_name])]
+                gen_func(wav_path)
+                out_path = wav_path
+                gen_count += 1
+            generated_files[cat_name].append({"file": out_path, "info": post_info})
             idx += 1
-    
-    print(f"\n  共生成 {idx} 个音频文件")
+
+    print(f"\n  共 {idx} 个音频文件 (示例: {sample_count}, 生成: {gen_count})")
     
     print("\n=== Step 6: 上传帖子到对应分类 ===")
     total = 0
