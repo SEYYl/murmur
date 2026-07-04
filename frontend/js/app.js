@@ -216,7 +216,7 @@ function navigate(view, data) {
     state.postId = data;
   }
   const c = $('content'); if (!c) return;
-  c.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  c.innerHTML = '<div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div>';
   if (view==='upload') renderUpload();
   else if (view==='edit') renderEdit();
   else if (view==='post') renderPost();
@@ -282,13 +282,13 @@ async function renderHome() {
   </div>
   <div id="featured-section" style="display:none;margin-bottom:20px">
     <h2 style="font-size:1rem;margin-bottom:10px">✨ 编辑推荐</h2>
-    <div id="featured-scroll" style="display:flex;gap:12px;overflow-x:auto;padding-bottom:8px"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="featured-scroll" style="display:flex;gap:12px;overflow-x:auto;padding-bottom:8px"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
   </div>
   <div class="sort-tabs">
     <button class="sort-tab ${state.sort==='latest'?'active':''}" onclick="state.sort='latest';state.page=1;navigate('home')">最新</button>
     <button class="sort-tab ${state.sort==='popular'?'active':''}" onclick="state.sort='popular';state.page=1;navigate('home')">最多播放</button>
   </div>
-  <div id="posts"><div class="loading"><div class="spinner"></div></div></div>`;
+  <div id="posts"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   if (!state.cat && !state.search) {
     loadFeatured();
   }
@@ -307,6 +307,7 @@ async function loadPosts() {
   for(const p of data.items) {
     const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
     const card = document.createElement('div'); card.className = 'card';
+    card.style.animationDelay = `${grid.children.length * 0.05}s`;
     card.setAttribute('role', 'button'); card.setAttribute('tabindex', '0');
     card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',p.id); };
     const rp = getResumePos(p.id);
@@ -359,9 +360,11 @@ function aupdateUI(id) {
   const bigBtn = document.getElementById(`apb-${id}`);
   const smallBtn = document.getElementById(`aps-${id}`);
   const overlay = document.getElementById(`apo-${id}`);
+  const visual = document.querySelector(`.audio-visual`);
   if (bigBtn) bigBtn.textContent = playing ? '⏸' : '▶';
   if (smallBtn) smallBtn.textContent = playing ? '⏸' : '▶';
   if (overlay) overlay.style.display = playing ? 'none' : 'flex';
+  if (visual) visual.classList.toggle('paused', !playing);
   if (a.duration) {
     const pct = (a.currentTime / a.duration) * 100;
     const fill = document.getElementById(`apf-${id}`);
@@ -475,7 +478,7 @@ function vshow(id) {
 // ─── Post Detail ───
 let _postPollTimer = null;
 async function renderPost() {
-  const con = $('content'); con.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const con = $('content'); con.innerHTML = '<div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div>';
   const p = await api(`/api/posts/${state.postId}`);
   if(!p) { con.innerHTML='<div class="empty"><p>找不到了</p><button class="btn btn-primary" onclick="navigate()">返回</button></div>'; return; }
   const isV = p.file_type==='video';
@@ -664,7 +667,7 @@ async function renderPost() {
         <p style="color:var(--text3);margin-bottom:8px">登录后可以发表评论</p>
         <button class="btn btn-primary" onclick="showLogin()">去登录</button>
       </div>`}
-      <div id="comments-list"><div class="loading"><div class="spinner"></div></div></div>
+      <div id="comments-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
     </div>`;
   con.innerHTML = html;
   updateQueueBar();
@@ -1105,7 +1108,7 @@ async function renderEdit() {
           </div>`:''}
         </div>
         <div class="form-group"><label>💬 字幕管理</label>
-          <div id="sub-list"><div class="loading"><div class="spinner"></div></div></div>
+          <div id="sub-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
           <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <button class="btn btn-secondary" onclick="$('esi').click()">➕ 上传字幕</button>
             <input type="file" id="esi" accept=".srt,.vtt" onchange="hes(event)" style="display:none">
@@ -1304,7 +1307,7 @@ async function renderFavorites() {
         <button class="btn ${_favSort==='popular'?'btn-primary':'btn-secondary'}" onclick="_favSort='popular';_favPage=1;renderFavorites()">热门</button>
       </div>
     </div>
-    <div id="fav-posts"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="fav-posts"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   await loadFavPosts();
 }
 
@@ -1365,7 +1368,7 @@ async function renderHistory() {
       <button class="btn ${!_histCat?'btn-primary':'btn-secondary'}" onclick="_histCat=null;_histPage=1;renderHistory()">🌐 全部</button>
       ${cats.map(c=>`<button class="btn ${_histCat===c.id?'btn-primary':'btn-secondary'}" onclick="_histCat=${c.id};_histPage=1;renderHistory()">${c.icon} ${c.name}</button>`).join('')}
     </div>
-    <div id="hist-list"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="hist-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   await loadHistory();
 }
 
@@ -1487,7 +1490,7 @@ async function renderAdmin() {
     ${cats.map(c=>`<button class="chip ${_adminCat===c.id?'active':''}" onclick="_adminCat=${c.id};renderAdmin()">${c.icon} ${c.name}</button>`).join('')}
   </div>`;
 
-  con.innerHTML += `<div id="admin-list"><div class="loading"><div class="spinner"></div></div></div>`;
+  con.innerHTML += `<div id="admin-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   
   let url = `/api/posts?page_size=100&sort=latest`;
   if(_adminCat) url += `&category_id=${_adminCat}`;
@@ -1534,7 +1537,7 @@ async function renderAdmin() {
   
   if(isAdmin){
     con.innerHTML += `<div class="section-head"><h2>🏷️ 分类管理</h2></div>
-      <div id="cat-mgr"><div class="loading"><div class="spinner"></div></div></div>`;
+      <div id="cat-mgr"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
     
     const cats2 = await api('/api/categories')||[];
     let ch = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:16px">`;
@@ -1673,7 +1676,7 @@ async function renderAdminDashboard() {
       <div class="hero-stats" id="hero-stats"><span>载入中…</span></div>
     </div>
     ${adminTabs('dashboard')}
-    <div id="dash-kpi"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="dash-kpi"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
     <div class="section-head">
       <h2>📈 趋势分析</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -1689,25 +1692,25 @@ async function renderAdminDashboard() {
         </select>
       </div>
     </div>
-    <div id="dash-chart" class="chart-card"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="dash-chart" class="chart-card"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
     <div class="dash-grid">
       <div>
         <div class="section-head"><h2>🏆 热门内容 Top10</h2></div>
-        <div id="dash-top" class="top-list"><div class="loading"><div class="spinner"></div></div></div>
+        <div id="dash-top" class="top-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
       </div>
       <div>
         <div class="section-head"><h2>🗂 分类分布</h2></div>
-        <div id="dash-cat" class="admin-card"><div class="loading"><div class="spinner"></div></div></div>
+        <div id="dash-cat" class="admin-card"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
       </div>
     </div>
     <div class="dash-grid">
       <div>
         <div class="section-head"><h2>📊 完播率 Top10</h2></div>
-        <div id="dash-top-completion" class="top-list"><div class="loading"><div class="spinner"></div></div></div>
+        <div id="dash-top-completion" class="top-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
       </div>
       <div>
         <div class="section-head"><h2>⏱ 播放时长趋势</h2></div>
-        <div id="dash-play-trend" class="chart-card"><div class="loading"><div class="spinner"></div></div></div>
+        <div id="dash-play-trend" class="chart-card"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
       </div>
     </div>`;
   loadDashKpi();
@@ -1870,7 +1873,7 @@ async function renderAdminUsers() {
         <option value="banned">封禁</option>
       </select>
     </div>
-    <div id="user-list"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="user-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   if(_userFilter.role) $('user-role').value = _userFilter.role;
   if(_userFilter.status) $('user-status').value = _userFilter.status;
   loadUserList();
@@ -1950,7 +1953,7 @@ async function renderAdminSettings() {
       <div class="sub">站点配置 · 修改后即时生效</div>
     </div>
     ${adminTabs('settings')}
-    <div id="settings-form"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="settings-form"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   const s = await api('/api/admin/settings')||{};
   $('settings-form').innerHTML = `
     <div class="form-section">
@@ -2245,8 +2248,8 @@ async function renderTagPosts() {
   if (!tagId) { navigate('home'); return; }
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div id="tag-header"><div class="loading"><div class="spinner"></div></div></div>
-    <div id="tag-posts"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="tag-header"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
+    <div id="tag-posts"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   _tagPage = 1;
   await loadTagPosts(tagId);
 }
@@ -2329,7 +2332,7 @@ async function renderPlaylists() {
       <button class="sort-tab ${_plTab==='mine'?'active':''}" onclick="_plTab='mine';_plPage=1;renderPlaylists()">我的歌单</button>
       <button class="sort-tab ${_plTab==='discover'?'active':''}" onclick="_plTab='discover';_plPage=1;renderPlaylists()">发现公开</button>
     </div>
-    <div id="playlist-list"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="playlist-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   await loadPlaylistList();
 }
 
@@ -2474,8 +2477,8 @@ async function renderPlaylistDetail() {
   if (!plId) { navigate('playlists'); return; }
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate('playlists')">← 返回</button>
-    <div id="pl-detail-header"><div class="loading"><div class="spinner"></div></div></div>
-    <div id="pl-items"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="pl-detail-header"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
+    <div id="pl-items"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   const pl = await api(`/api/playlists/${plId}`);
   if (!pl) {
     con.innerHTML = '<div class="empty"><p>歌单不存在</p><button class="btn btn-primary" onclick="navigate(\'playlists\')">返回</button></div>';
@@ -2569,7 +2572,7 @@ function showAddToPlaylist(postId) {
   const o = document.createElement('div'); o.className = 'auth-modal'; o.classList.add('atp-modal');
   o.innerHTML = `<div class="auth-box">
     <h2>🎵 添加到歌单</h2>
-    <div id="atp-list" style="max-height:300px;overflow-y:auto;margin-bottom:12px"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="atp-list" style="max-height:300px;overflow-y:auto;margin-bottom:12px"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
     <div class="auth-actions">
       <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
       <button class="btn btn-ghost" onclick="showCreatePlaylistFromAtp()">➕ 新建歌单</button>
@@ -2740,7 +2743,7 @@ async function renderAdminReports() {
       <div class="sub">处理用户举报内容 · 维护社区健康</div>
     </div>
     ${adminTabs('reports')}
-    <div id="reports-list"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="reports-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   const data = await api('/api/admin/reports?status=pending') || {};
   const items = data.items || data || [];
   const list = $('reports-list');
@@ -2809,9 +2812,9 @@ async function renderAdminTranscode() {
       <div class="sub">监控转码任务状态 · 自动重试机制保障</div>
     </div>
     ${adminTabs('transcode')}
-    <div id="transcode-status"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="transcode-status"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>
     <div class="section-head"><h2>📋 任务列表</h2></div>
-    <div id="transcode-list"><div class="loading"><div class="spinner"></div></div></div>`;
+    <div id="transcode-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   loadTranscodeStatus();
   loadTranscodeList();
   if (_transcodePollTimer) clearInterval(_transcodePollTimer);
