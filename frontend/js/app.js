@@ -1457,6 +1457,81 @@ function adminTabs(active) {
   return `<div class="admin-tabs">${tabs.map(t=>`<button class="admin-tab ${active===t.key?'active':''}" onclick="navigate('${t.view}')">${t.icon} ${t.label}</button>`).join('')}</div>`;
 }
 
+function showManualAddForm() {
+  if (qs('.manual-add-modal')) return;
+  api('/api/categories').then(cats => {
+    const o = document.createElement('div'); o.className = 'auth-modal manual-add-modal';
+    o.innerHTML = `<div class="auth-box" style="max-width:520px">
+      <h2>➕ 手动添加内容</h2>
+      <p style="font-size:.8rem;color:var(--text3);margin-bottom:16px">
+        适用于已直接上传到 R2/S3 的大文件，跳过服务器上传和转码
+      </p>
+      <div class="input-group"><label>标题 *</label>
+        <input id="ma-title" class="form-input" placeholder="内容标题"></div>
+      <div class="input-group"><label>描述</label>
+        <textarea id="ma-desc" class="form-input" style="min-height:60px" placeholder="内容描述（可选）"></textarea></div>
+      <div class="input-group"><label>分类 *</label>
+        <select id="ma-category" class="form-select">
+          ${cats.map(c=>`<option value="${c.id}">${c.icon} ${c.name}</option>`).join('')}
+        </select></div>
+      <div class="input-group"><label>标签（逗号分隔）</label>
+        <input id="ma-tags" class="form-input" placeholder="如: 白噪音, 自然, 雨声"></div>
+      <div class="input-group"><label>文件类型 *</label>
+        <select id="ma-type" class="form-select">
+          <option value="audio">🎵 音频</option>
+          <option value="video">🎬 视频</option>
+        </select></div>
+      <div class="input-group"><label>R2 文件路径 *</label>
+        <input id="ma-key" class="form-input" placeholder="如: audio/myfile.mp4 或 video/bigfile.mp4">
+        <div class="form-hint">在 R2 控制台复制文件的完整路径（含子目录），例如 audio/rain.mp3</div></div>
+      <div class="input-group"><label>封面路径（可选）</label>
+        <input id="ma-cover" class="form-input" placeholder="如: covers/thumb.jpg（留空则无封面）"></div>
+      <div class="input-group" style="display:flex;gap:8px">
+        <div style="flex:1"><label>时长（秒，可选）</label>
+          <input id="ma-duration" class="form-input" type="number" min="0" step="1" placeholder="0"></div>
+        <div style="flex:1"><label>文件大小（字节，可选）</label>
+          <input id="ma-size" class="form-input" type="number" min="0" step="1" placeholder="0"></div>
+      </div>
+      <div class="auth-actions">
+        <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
+        <button class="btn btn-primary" onclick="submitManualAdd()">✅ 保存</button>
+      </div>
+    </div>`;
+    document.body.appendChild(o);
+  });
+}
+
+async function submitManualAdd() {
+  const btn = qs('.manual-add-modal .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 保存中…'; }
+  try {
+    const data = new FormData();
+    data.append('title', $('ma-title').value.trim());
+    data.append('description', $('ma-desc').value.trim());
+    data.append('category_id', $('ma-category').value);
+    data.append('tags', $('ma-tags').value.trim());
+    data.append('file_type', $('ma-type').value);
+    data.append('r2_key', $('ma-key').value.trim());
+    data.append('cover_key', $('ma-cover').value.trim());
+    data.append('duration', parseFloat($('ma-duration').value) || 0);
+    data.append('file_size', parseInt($('ma-size').value) || 0);
+    if (!data.get('title')) { toast('请输入标题', 'error'); if(btn){btn.disabled=false;btn.textContent='✅ 保存'} return; }
+    if (!data.get('r2_key')) { toast('请输入 R2 文件路径', 'error'); if(btn){btn.disabled=false;btn.textContent='✅ 保存'} return; }
+    const r = await api('/api/admin/posts/manual', { method: 'POST', body: data });
+    if (r?.id) {
+      toast('✅ 内容已添加！', 'success');
+      qs('.manual-add-modal')?.remove();
+      renderAdmin();
+    } else {
+      toast(r?.detail || '添加失败', 'error');
+    }
+  } catch (e) {
+    toast('添加失败: ' + (e.message || e), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✅ 保存'; }
+  }
+}
+
 async function renderAdmin() {
   if(!state.user){showLogin();return;}
   const isAdmin = state.user.role === 'admin';
@@ -1494,6 +1569,10 @@ async function renderAdmin() {
     ${cats.map(c=>`<button class="chip ${_adminCat===c.id?'active':''}" onclick="_adminCat=${c.id};renderAdmin()">${c.icon} ${c.name}</button>`).join('')}
   </div>`;
 
+  con.innerHTML += `<div style="display:flex;gap:8px;margin-bottom:12px">
+    ${isAdmin?`<button class="btn btn-primary" onclick="showManualAddForm()" style="flex:1">➕ 手动添加</button>`:''}
+    <a href="${window.location.pathname}#upload" class="btn btn-secondary" style="flex:1;text-align:center;text-decoration:none">📤 上传</a>
+  </div>`;
   con.innerHTML += `<div id="admin-list"><div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div></div>`;
   
   let url = `/api/posts?page_size=100&sort=latest`;

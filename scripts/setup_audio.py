@@ -10,7 +10,7 @@ import struct
 import wave
 import math
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.environ.get("API_BASE_URL", "https://murmur-wnk8.onrender.com").rstrip("/")
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 MEDIA_DIR = os.path.join(ROOT_DIR, "media", "audio")
 TEST_DIR = os.path.join(ROOT_DIR, "test_content")
@@ -193,16 +193,31 @@ def generate_binaural(filename, duration=30, sample_rate=44100, base_freq=200, b
 def main():
     os.makedirs(TEMP_DIR, exist_ok=True)
     
+    print(f"=== 目标服务器: {BASE_URL} ===")
+    print("  Render 免费版可能休眠中，正在唤醒…")
+    for attempt in range(5):
+        try:
+            req = urllib.request.Request(BASE_URL + "/api/categories")
+            urllib.request.urlopen(req, timeout=30)
+            break
+        except Exception as e:
+            print(f"  等待唤醒 ({attempt+1}/5): {e}")
+            import time
+            time.sleep(5)
+    print("  服务器已就绪\n")
+    
+    admin_user = os.environ.get("ADMIN_USER", "admin")
+    admin_pass = os.environ.get("ADMIN_PASS", "admin123")
     print("=== Step 1: 登录管理员 ===")
     try:
-        r = api_post("/api/login", {"username": "admin", "password": "admin123"})
+        r = api_post("/api/login", {"username": admin_user, "password": admin_pass})
         token = r["token"]
         print(f"  登录成功: {r['user']['username']}")
     except Exception as e:
         print(f"  登录失败: {e}")
         print("  尝试注册管理员...")
         try:
-            r = api_post("/api/register", {"username": "admin", "password": "admin123", "email": "admin@example.com"})
+            r = api_post("/api/register", {"username": admin_user, "password": admin_pass, "email": "admin@example.com"})
             token = r["token"]
             print(f"  注册成功: {r['user']['username']}")
         except Exception as e2:
@@ -232,14 +247,7 @@ def main():
         except Exception as e:
             print(f"    删除失败: {e}")
     
-    print("\n=== Step 4: 清理媒体音频文件 ===")
-    for f in os.listdir(MEDIA_DIR):
-        fp = os.path.join(MEDIA_DIR, f)
-        if os.path.isfile(fp) and f.endswith((".mp3", ".wav", ".mp4", ".m4a")):
-            print(f"  删除: {f}")
-            os.remove(fp)
-    
-    print("\n=== Step 5: 准备 ASMR 音频文件 ===")
+    print("\n=== Step 4: 准备 ASMR 音频文件 ===")
 
     audio_generators = {
         "耳语": [
@@ -314,7 +322,7 @@ def main():
 
     print(f"\n  共 {idx} 个音频文件 (示例: {sample_count}, 生成: {gen_count})")
     
-    print("\n=== Step 6: 上传帖子到对应分类 ===")
+    print("\n=== Step 5: 上传帖子到对应分类 ===")
     total = 0
     for cat_name, items in generated_files.items():
         cat_id = cat_map.get(cat_name)

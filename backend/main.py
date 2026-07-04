@@ -1944,6 +1944,77 @@ def storage_migrate(admin: User = Depends(require_admin), db: Session = Depends(
     return {"migrated": migrated, "failed": failed, "backend": "s3"}
 
 
+@app.post("/api/admin/posts/manual")
+def create_post_manual(
+    title: str = Form(...), description: str = Form(""),
+    category_id: int = Form(...), tags: str = Form(""),
+    file_type: str = Form(...), r2_key: str = Form(...),
+    cover_key: str = Form(""),
+    duration: float = Form(0), file_size: int = Form(0),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Manually create a post pointing to an existing file in R2/S3.
+
+    Used for large files uploaded directly to R2 via the Cloudflare dashboard,
+    bypassing the server upload + transcode bottleneck.
+    """
+    title = title.strip()
+    description = (description or "").strip()
+    r2_key = r2_key.strip().lstrip("/")
+
+    if file_type not in ("audio", "video"):
+        raise HTTPException(400, "file_type 必须是 audio 或 video")
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    if not r2_key:
+        raise HTTPException(400, "R2 文件路径不能为空")
+
+    # Sensitive word filter
+    sensitive_words = _get_sensitive_words(db=db)
+    bad = _contains_sensitive_word(title, sensitive_words) or _contains_sensitive_word(description, sensitive_words)
+    if bad:
+        raise HTTPException(400, f"内容包含敏感词：{bad}")
+
+    # Verify category exists
+    cat = db.query(Category).filter(Category.id == category_id).first()
+    if not cat:
+        raise HTTPException(400, "分类不存在")
+
+    # Verify the file exists in storage backend
+    _s = get_storage(db=db)
+    if _s.backend_name() == "s3":
+        try:
+            if not _s.exists(r2_key):
+                raise HTTPException(400, f"在存储后端中未找到文件: {r2_key}")
+        except NotImplementedError:
+            pass
+
+    file_path = f"media/{r2_key}"
+
+    # Cover
+    cover_url = ""
+    if cover_key:
+        cover_key = cover_key.strip().lstrip("/")
+        cover_url = f"media/{cover_key}"
+
+    post = Post(
+        title=title, description=description,
+        file_path=file_path, file_type=file_type,
+        file_size=file_size, duration=duration,
+        cover_image=cover_url,
+        category_id=category_id, user_id=admin.id,
+        status="ready", content_hash="",
+    )
+    db.add(post)
+    db.flush()
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    _set_post_tags(db, post.id, tag_list)
+    db.commit()
+    db.refresh(post)
+
+    return {"id": post.id, "title": post.title, "file_type": post.file_type, "status": post.status}
+
+
 @app.get("/api/admin/transcode/list")
 def transcode_list(
     status: str = Query(None),
