@@ -16,6 +16,76 @@ from backend.models import (
     Comment, Subtitle, Report, PlaySession, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS,
 )
 from backend.auth import hash_password, verify_password, create_access_token, get_current_user, require_creator, require_admin, get_token
+from backend.storage import get_storage, reset_storage_cache, LocalStorage, get_provider_presets
+
+
+# ─── Storage helpers (PRD-019) ───
+def _storage_is_s3() -> bool:
+    """Return True if the active storage backend is S3."""
+    try:
+        return get_storage().backend_name() == "s3"
+    except Exception:
+        return False
+
+
+def _rel_from_url(url: str) -> str:
+    """Convert a stored file_path like 'media/audio/abc.mp3' to 'audio/abc.mp3'."""
+    if url and url.startswith("media/"):
+        return url[len("media/"):]
+    return url or ""
+
+
+def _promote_to_storage(local_abs_path: str, rel_path: str):
+    """Upload a local file to the storage backend if it's S3.
+
+    For LocalStorage this is a no-op (file is already in place).
+    For S3Storage this reads the local file and uploads it.
+    """
+    try:
+        storage = get_storage()
+    except Exception:
+        return
+    if storage.backend_name() != "s3":
+        return
+    if not os.path.exists(local_abs_path):
+        return
+    try:
+        with open(local_abs_path, "rb") as f:
+            storage.save(rel_path, f.read())
+    except Exception as e:
+        print(f"[storage] promote to S3 failed for {rel_path}: {e}", flush=True)
+
+
+def _delete_from_storage(rel_path: str):
+    """Delete a file from the storage backend. No-op if file missing."""
+    try:
+        storage = get_storage()
+        storage.delete(rel_path)
+    except Exception as e:
+        print(f"[storage] delete failed for {rel_path}: {e}", flush=True)
+
+
+def _serve_media(rel_path: str, request: Request, content_type: str):
+    """Serve a media file from the active storage backend.
+
+    - LocalStorage: stream from disk with Range support.
+    - S3Storage: 302 redirect to a presigned URL (efficient, no proxying).
+    """
+    try:
+        storage = get_storage()
+    except Exception:
+        storage = LocalStorage()
+
+    if storage.backend_name() == "s3":
+        # Presigned URL redirect — S3 serves bytes directly.
+        url = storage.presigned_url(rel_path, expires=3600)
+        return Response(status_code=302, headers={"Location": url, "Cache-Control": "private, max-age=300"})
+
+    # Local: stream with Range support.
+    full_path = storage.abs_path(rel_path)
+    if not os.path.exists(full_path):
+        raise HTTPException(404)
+    return stream_file(full_path, request, content_type)
 
 # ─── View count anti-spam ───
 _view_history = {}  # {(post_id, ip): timestamp}
@@ -114,6 +184,7 @@ def transcode_task(post_id: int, file_path: str, file_type: str):
 
     Runs `compress_media` on the saved file, then marks the post as ready.
     On repeated failure or timeout, marks the post as failed.
+    After successful transcode, promotes the file to S3 if that backend is active.
     """
     deadline = time.time() + _TRANSCODE_TIMEOUT_SECONDS
     with _transcode_lock:
@@ -130,6 +201,9 @@ def transcode_task(post_id: int, file_path: str, file_type: str):
                 # Success: refresh file info and mark ready
                 info = get_media_info(file_path)
                 _update_post_status(post_id, "ready", file_size=info.get("size"))
+                # PRD-019: promote to S3 if that backend is active
+                rel = _rel_from_url(f"media/{'audio' if file_type == 'audio' else 'video'}/{os.path.basename(file_path)}")
+                _promote_to_storage(file_path, rel)
                 return
             except Exception as e:
                 last_err = e
@@ -376,38 +450,22 @@ def startup():
 # ─── Media serving with Range + Cache ───
 @app.get("/media/audio/{filename}")
 async def serve_audio(filename: str, request: Request):
-    file_path = os.path.join(MEDIA_DIR, "audio", filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(404)
-    ct, _ = mimetypes.guess_type(file_path)
-    return stream_file(file_path, request, ct or "audio/mpeg")
+    return _serve_media(f"audio/{filename}", request, "audio/mpeg")
 
 
 @app.get("/media/video/{filename}")
 async def serve_video(filename: str, request: Request, user: User = Depends(get_current_user)):
-    file_path = os.path.join(MEDIA_DIR, "video", filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(404)
-    ct, _ = mimetypes.guess_type(file_path)
-    return stream_file(file_path, request, ct or "video/mp4")
+    return _serve_media(f"video/{filename}", request, "video/mp4")
 
 
 @app.get("/media/covers/{filename}")
 async def serve_cover(filename: str, request: Request):
-    file_path = os.path.join(MEDIA_DIR, "covers", filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(404)
-    ct, _ = mimetypes.guess_type(file_path)
-    return stream_file(file_path, request, ct or "image/jpeg")
+    return _serve_media(f"covers/{filename}", request, "image/jpeg")
 
 
 @app.get("/media/subtitles/{filename}")
 async def serve_subtitle(filename: str, request: Request):
-    file_path = os.path.join(MEDIA_DIR, "subtitles", filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(404)
-    ct, _ = mimetypes.guess_type(file_path)
-    return stream_file(file_path, request, ct or "text/plain")
+    return _serve_media(f"subtitles/{filename}", request, "text/vtt")
 
 
 # ─── Auth ───
@@ -643,11 +701,15 @@ async def create_post(
             # Compress cover image
             compress_image(cover_path)
             cover_url = f"media/covers/{cf}"
+            # PRD-019: promote cover to S3
+            _promote_to_storage(cover_path, f"covers/{cf}")
     elif file_type == "video" and info["duration"] > 0:
         tf = f"{fid}_thumb.jpg"
         thumb_path = os.path.join(MEDIA_DIR, "covers", tf)
         if gen_thumb(final_path, thumb_path, info["duration"] * 0.3):
             cover_url = f"media/covers/{tf}"
+            # PRD-019: promote thumb to S3
+            _promote_to_storage(thumb_path, f"covers/{tf}")
 
     url = f"media/{subdir}/{fname}"
 
@@ -677,13 +739,24 @@ def delete_post(post_id: int, user: User = Depends(get_current_user), db: Sessio
         raise HTTPException(404)
     if user.role != "admin" and p.user_id != user.id:
         raise HTTPException(403, "无权限删除此内容")
-    abs_path = os.path.join(MEDIA_DIR, *p.file_path.split("/")[1:])
-    if os.path.exists(abs_path):
-        os.remove(abs_path)
+    # PRD-019: delete from storage backend (works for both local & S3)
+    if p.file_path:
+        _delete_from_storage(_rel_from_url(p.file_path))
+        # Also remove local file if present (for S3 mode, local may still exist)
+        abs_path = os.path.join(MEDIA_DIR, *p.file_path.split("/")[1:])
+        if os.path.exists(abs_path):
+            try:
+                os.remove(abs_path)
+            except OSError:
+                pass
     if p.cover_image:
+        _delete_from_storage(_rel_from_url(p.cover_image))
         cp = os.path.join(MEDIA_DIR, "covers", os.path.basename(p.cover_image))
         if os.path.exists(cp):
-            os.remove(cp)
+            try:
+                os.remove(cp)
+            except OSError:
+                pass
     db.delete(p)
     db.commit()
     return {"ok": True}
@@ -913,9 +986,12 @@ async def update_post(
         with open(cover_path, "wb") as f:
             f.write(await cover.read())
         compress_image(cover_path)
+        # PRD-019: promote new cover to S3
+        _promote_to_storage(cover_path, f"covers/{cf}")
         old_cover = p.cover_image
         p.cover_image = f"media/covers/{cf}"
         if old_cover:
+            _delete_from_storage(_rel_from_url(old_cover))
             cp = os.path.join(MEDIA_DIR, "covers", os.path.basename(old_cover))
             if os.path.exists(cp):
                 try:
@@ -948,7 +1024,7 @@ def update_admin_settings(data: dict, admin: User = Depends(require_admin), db: 
     for k, v in data.items():
         if k not in allowed:
             continue
-        if k.startswith(("storage_backend", "s3_")):
+        if k.startswith(("storage_", "s3_")):
             storage_keys_touched = True
         row = db.query(SystemSetting).filter(SystemSetting.key == k).first()
         if row:
@@ -1521,6 +1597,8 @@ async def upload_subtitle(
     content = await file.read()
     with open(sub_path, "wb") as f:
         f.write(content)
+    # PRD-019: promote subtitle to S3
+    _promote_to_storage(sub_path, f"subtitles/{fname}")
     sub = Subtitle(post_id=post_id, language=language.strip() or "zh",
                    file_path=f"media/subtitles/{fname}")
     db.add(sub)
@@ -1555,6 +1633,8 @@ def delete_subtitle(subtitle_id: int, user: User = Depends(get_current_user),
         raise HTTPException(404, "内容不存在")
     if user.role != "admin" and post.user_id != user.id:
         raise HTTPException(403, "无权限删除此字幕")
+    # PRD-019: delete from storage backend
+    _delete_from_storage(_rel_from_url(sub.file_path))
     abs_path = os.path.join(MEDIA_DIR, "subtitles", os.path.basename(sub.file_path))
     if os.path.exists(abs_path):
         try:
@@ -1590,11 +1670,14 @@ def set_cover_frame(
     cover_path = os.path.join(MEDIA_DIR, "covers", cf)
     if not gen_thumb(abs_video, cover_path, t):
         raise HTTPException(500, "封面截取失败")
+    # PRD-019: promote cover frame to S3
+    _promote_to_storage(cover_path, f"covers/{cf}")
     old_cover = p.cover_image
     p.cover_image = f"media/covers/{cf}"
     p.updated_at = datetime.now(timezone.utc)
     db.commit()
     if old_cover:
+        _delete_from_storage(_rel_from_url(old_cover))
         cp = os.path.join(MEDIA_DIR, "covers", os.path.basename(old_cover))
         if os.path.exists(cp):
             try:
@@ -1759,6 +1842,84 @@ def transcode_status(admin: User = Depends(require_admin), db: Session = Depends
     }
 
 
+# ─── PRD-019: Storage Management ───
+@app.get("/api/admin/storage/status")
+def storage_status(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Return current storage backend info, provider, and file counts."""
+    try:
+        storage = get_storage(db=db)
+        backend = storage.backend_name()
+        provider = storage.provider()
+    except Exception as e:
+        return {"backend": "error", "provider": "", "error": str(e)}
+    # Count local files (always available)
+    counts = {}
+    for subdir in ["audio", "video", "covers", "subtitles"]:
+        d = os.path.join(MEDIA_DIR, subdir)
+        if os.path.isdir(d):
+            counts[subdir] = len([f for f in os.listdir(d) if not f.startswith(".")])
+        else:
+            counts[subdir] = 0
+    return {
+        "backend": backend,
+        "provider": provider,
+        "local_counts": counts,
+        "s3_configured": bool(get_setting("s3_bucket", "", db=db)),
+        "presets": get_provider_presets(),
+        "provider_value": get_setting("storage_provider", "custom", db=db),
+    }
+
+
+@app.post("/api/admin/storage/test")
+def storage_test(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Test the configured storage backend connectivity."""
+    try:
+        storage = get_storage(db=db)
+        result = storage.test_connection()
+        return result
+    except ImportError as e:
+        return {"ok": False, "error": str(e), "details": {}}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "details": {}}
+
+
+@app.post("/api/admin/storage/migrate")
+def storage_migrate(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Migrate existing local files to the active S3 backend.
+
+    Walks all files under media/{audio,video,covers,subtitles}/ and uploads
+    them to S3. Use this after switching from local to S3 to backfill
+    pre-existing content. Idempotent — re-uploading the same key is safe.
+    """
+    try:
+        storage = get_storage(db=db)
+    except Exception as e:
+        raise HTTPException(500, f"存储后端初始化失败: {e}")
+    if storage.backend_name() != "s3":
+        raise HTTPException(400, "当前存储后端不是 S3，无需迁移")
+    migrated = 0
+    failed = 0
+    for subdir in ["audio", "video", "covers", "subtitles"]:
+        d = os.path.join(MEDIA_DIR, subdir)
+        if not os.path.isdir(d):
+            continue
+        for fname in os.listdir(d):
+            if fname.startswith("."):
+                continue
+            abs_path = os.path.join(d, fname)
+            if not os.path.isfile(abs_path):
+                continue
+            rel = f"{subdir}/{fname}"
+            try:
+                with open(abs_path, "rb") as f:
+                    storage.save(rel, f.read())
+                migrated += 1
+            except Exception as e:
+                print(f"[migrate] failed {rel}: {e}", flush=True)
+                failed += 1
+    return {"migrated": migrated, "failed": failed, "backend": "s3"}
+
+
 @app.get("/api/admin/transcode/list")
 def transcode_list(
     status: str = Query(None),
@@ -1890,13 +2051,17 @@ def resolve_report(
         if rpt.target_type == "post":
             tp = db.query(Post).filter(Post.id == rpt.target_id).first()
             if tp:
-                abs_path = os.path.join(MEDIA_DIR, *tp.file_path.split("/")[1:]) if tp.file_path else ""
-                if abs_path and os.path.exists(abs_path):
-                    try:
-                        os.remove(abs_path)
-                    except OSError:
-                        pass
+                # PRD-019: delete from storage backend
+                if tp.file_path:
+                    _delete_from_storage(_rel_from_url(tp.file_path))
+                    abs_path = os.path.join(MEDIA_DIR, *tp.file_path.split("/")[1:]) if tp.file_path else ""
+                    if abs_path and os.path.exists(abs_path):
+                        try:
+                            os.remove(abs_path)
+                        except OSError:
+                            pass
                 if tp.cover_image:
+                    _delete_from_storage(_rel_from_url(tp.cover_image))
                     cp = os.path.join(MEDIA_DIR, "covers", os.path.basename(tp.cover_image))
                     if os.path.exists(cp):
                         try:

@@ -1408,14 +1408,15 @@ let _adminCat = null;
 
 function adminTabs(active) {
   if(!state.user || state.user.role !== 'admin') return '';
-  return `<div class="admin-tabs" style="display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);overflow-x:auto">
-    <button class="admin-tab ${active==='dashboard'?'active':''}" onclick="navigate('admin-dashboard')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='dashboard'?'var(--accent)':'transparent'};color:${active==='dashboard'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">📊 数据看板</button>
-    <button class="admin-tab ${active==='content'?'active':''}" onclick="navigate('admin')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='content'?'var(--accent)':'transparent'};color:${active==='content'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">📦 内容管理</button>
-    <button class="admin-tab ${active==='transcode'?'active':''}" onclick="navigate('admin-transcode')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='transcode'?'var(--accent)':'transparent'};color:${active==='transcode'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">🎬 转码队列</button>
-    <button class="admin-tab ${active==='reports'?'active':''}" onclick="navigate('admin-reports')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='reports'?'var(--accent)':'transparent'};color:${active==='reports'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">🚩 举报队列</button>
-    <button class="admin-tab ${active==='users'?'active':''}" onclick="navigate('admin-users')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='users'?'var(--accent)':'transparent'};color:${active==='users'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">👥 用户管理</button>
-    <button class="admin-tab ${active==='settings'?'active':''}" onclick="navigate('admin-settings')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='settings'?'var(--accent)':'transparent'};color:${active==='settings'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">⚙️ 系统设置</button>
-  </div>`;
+  const tabs = [
+    {key:'dashboard', icon:'📊', label:'数据看板', view:'admin-dashboard'},
+    {key:'content',   icon:'📦', label:'内容管理', view:'admin'},
+    {key:'transcode', icon:'🎬', label:'转码队列', view:'admin-transcode'},
+    {key:'reports',   icon:'🚩', label:'举报队列', view:'admin-reports'},
+    {key:'users',     icon:'👥', label:'用户管理', view:'admin-users'},
+    {key:'settings',  icon:'⚙️', label:'系统设置', view:'admin-settings'},
+  ];
+  return `<div class="admin-tabs">${tabs.map(t=>`<button class="admin-tab ${active===t.key?'active':''}" onclick="navigate('${t.view}')">${t.icon} ${t.label}</button>`).join('')}</div>`;
 }
 
 async function renderAdmin() {
@@ -1425,7 +1426,10 @@ async function renderAdmin() {
   if(!isAdmin && !isCreator){navigate('home');toast('⛔ 无权限访问','error');return;}
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>📋 内容管理</h1><div class="sub">${isAdmin?'管理所有上传的音频和视频':'管理我上传的内容'}</div></div>
+    <div class="admin-hero">
+      <h1>📋 内容管理</h1>
+      <div class="sub">${isAdmin?'管理所有上传的音频和视频':'管理我上传的内容'}</div>
+    </div>
     ${adminTabs('content')}`;
 
   const cats = await api('/api/categories')||[];
@@ -1433,15 +1437,23 @@ async function renderAdmin() {
   if(isAdmin){
     const stats = await api('/api/posts?page_size=1')||{};
     const total = stats.total||0;
-    con.innerHTML += `<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700">${total}</div><div style="font-size:.75rem;color:var(--text3)">全部内容</div></div>
-      ${cats.map(c=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:100px"><div style="font-size:.9rem;font-weight:600">${c.icon} ${c.name}</div><div style="font-size:.75rem;color:var(--text3)">${c.post_count} 个</div></div>`).join('')}
+    con.innerHTML += `<div class="kpi-grid" style="margin-bottom:18px">
+      <div class="kpi-card">
+        <div class="kpi-icon">📚</div>
+        <div class="kpi-label">全部内容</div>
+        <div class="kpi-value">${total}</div>
+      </div>
+      ${cats.map(c=>`<div class="kpi-card">
+        <div class="kpi-icon">${c.icon}</div>
+        <div class="kpi-label">${esc(c.name)}</div>
+        <div class="kpi-value" style="font-size:1.3rem">${c.post_count}</div>
+      </div>`).join('')}
     </div>`;
   }
 
-  con.innerHTML += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-    <button class="btn ${!_adminCat?'btn-primary':'btn-secondary'}" onclick="_adminCat=null;renderAdmin()">🌐 全部</button>
-    ${cats.map(c=>`<button class="btn ${_adminCat===c.id?'btn-primary':'btn-secondary'}" onclick="_adminCat=${c.id};renderAdmin()">${c.icon} ${c.name}</button>`).join('')}
+  con.innerHTML += `<div class="filter-chips">
+    <button class="chip ${!_adminCat?'active':''}" onclick="_adminCat=null;renderAdmin()">🌐 全部</button>
+    ${cats.map(c=>`<button class="chip ${_adminCat===c.id?'active':''}" onclick="_adminCat=${c.id};renderAdmin()">${c.icon} ${c.name}</button>`).join('')}
   </div>`;
 
   con.innerHTML += `<div id="admin-list"><div class="loading"><div class="spinner"></div></div></div>`;
@@ -1451,63 +1463,69 @@ async function renderAdmin() {
   const data = await api(url);
   const list = $('admin-list');
   if(!data||!data.items||!data.items.length){
-    list.innerHTML='<div class="empty"><div class="icon">📦</div><p>还没有内容</p></div>';
+    list.innerHTML='<div class="empty-state"><div class="icon">📦</div><p>还没有内容</p></div>';
   } else {
     let items = data.items;
     if(isCreator){
       items = items.filter(p => p.user && p.user.id === state.user.id);
     }
     if(!items.length){
-      list.innerHTML='<div class="empty"><div class="icon">📦</div><p>还没有内容</p></div>';
+      list.innerHTML='<div class="empty-state"><div class="icon">📦</div><p>还没有内容</p></div>';
     } else {
       let html = '';
       for(const p of items){
         const isV = p.file_type==='video';
         const canEdit = isAdmin || (p.user && p.user.id === state.user.id);
-        html += `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:8px">
-          <div style="font-size:1.5rem;opacity:.5;flex-shrink:0">${isV?'🎬':'🎵'}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
-            <div style="font-size:.75rem;color:var(--text3);margin-top:2px">
-              ${p.category?`${p.category.icon} ${esc(p.category.name)}`:'未分类'} · ${p.duration>0?dur(p.duration):'?'} · 👁${p.views} · ${dt(p.created_at)}
-              ${p.user?` · 👤 ${esc(p.user.username)}`:''}
+        const statusBadge = p.status === 'processing' ? '<span class="badge badge-processing">⏳ 转码中</span>'
+                          : p.status === 'failed' ? '<span class="badge badge-failed">❌ 转码失败</span>'
+                          : '<span class="badge badge-ready">✓ 就绪</span>';
+        html += `<div class="admin-row">
+          <div class="row-icon">${isV?'🎬':'🎵'}</div>
+          <div class="row-main">
+            <div class="row-title">${esc(p.title)}</div>
+            <div class="row-meta">
+              <span>${p.category?p.category.icon+' '+esc(p.category.name):'—'}</span>
+              <span>👁 ${p.views||0}</span>
+              <span>❤️ ${p.favorite_count||0}</span>
+              <span>📅 ${(p.created_at||'').slice(0,10)}</span>
+              ${statusBadge}
             </div>
           </div>
-          <div style="display:flex;gap:6px;flex-shrink:0">
-            ${isAdmin?`<button class="btn btn-ghost btn-icon" onclick="toggleAdminFeatured(${p.id},${p.featured})" title="${p.featured?'取消精选':'设为精选'}">${p.featured?'⭐':'☆'}</button>`:''}
-            <button class="btn btn-ghost" onclick="navigate('post',${p.id})">👁 查看</button>
-            ${canEdit?`<button class="btn btn-ghost" onclick="navigate('edit',${p.id})">✏️ 编辑</button>`:''}
-            ${canEdit?`<button class="btn btn-ghost" style="color:#f87171" onclick="deleteItem(${p.id})">🗑 删除</button>`:''}
+          <div class="row-actions">
+            ${canEdit?`<button class="btn btn-secondary" onclick="editPost(${p.id})" style="padding:6px 12px;font-size:.8rem">✏️</button>`:''}
+            ${canEdit?`<button class="btn btn-secondary" onclick="deletePost(${p.id})" style="padding:6px 12px;font-size:.8rem">🗑️</button>`:''}
           </div>
         </div>`;
       }
-      html += `<div style="text-align:center;margin-top:12px;font-size:.8rem;color:var(--text3)">共 ${items.length} 条内容</div>`;
       list.innerHTML = html;
     }
   }
   
   if(isAdmin){
-    con.innerHTML += `<hr style="border:none;border-top:1px solid var(--border);margin:32px 0">
-      <div class="page-header" style="margin-bottom:16px"><h2>🏷️ 分类管理</h2></div>
+    con.innerHTML += `<div class="section-head"><h2>🏷️ 分类管理</h2></div>
       <div id="cat-mgr"><div class="loading"><div class="spinner"></div></div></div>`;
     
     const cats2 = await api('/api/categories')||[];
     let ch = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:16px">`;
     for(const c of cats2){
-      ch += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;display:flex;align-items:center;gap:10px">
-        <span style="font-size:1.3rem">${c.icon}</span>
-        <span style="flex:1;font-size:.9rem;font-weight:500">${esc(c.name)}</span>
-        <span style="font-size:.75rem;color:var(--text3)">${c.post_count}个</span>
-        <button class="btn btn-ghost btn-icon" onclick="editCat(${c.id},'${esc(c.name)}','${c.icon}')" title="编辑">✏️</button>
-        <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="deleteCat(${c.id})" title="删除" ${c.post_count>0?'disabled':''}>🗑</button>
+      ch += `<div class="admin-row" style="padding:10px 14px;margin-bottom:0">
+        <span class="row-icon" style="font-size:1.2rem">${c.icon}</span>
+        <div class="row-main">
+          <div class="row-title" style="font-size:.88rem">${esc(c.name)}</div>
+          <div class="row-meta">${c.post_count} 个内容</div>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-secondary" onclick="editCat(${c.id},'${esc(c.name)}','${c.icon}')" style="padding:5px 10px;font-size:.78rem">✏️</button>
+          <button class="btn btn-secondary" onclick="deleteCat(${c.id})" style="padding:5px 10px;font-size:.78rem" ${c.post_count>0?'disabled':''}>🗑️</button>
+        </div>
       </div>`;
     }
     ch += `</div>`;
-    ch += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px">
-      <h3 style="font-size:.9rem;margin-bottom:12px">➕ 添加新分类</h3>
+    ch += `<div class="admin-card">
+      <h2>➕ 添加新分类</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input id="new-cat-icon" value="🎵" style="width:48px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px;color:var(--text);font-size:1.1rem;text-align:center">
-        <input id="new-cat-name" placeholder="分类名称" style="flex:1;min-width:120px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem">
+        <input id="new-cat-icon" value="🎵" class="form-input" style="width:60px;text-align:center;font-size:1.1rem">
+        <input id="new-cat-name" placeholder="分类名称" class="form-input" style="flex:1;min-width:120px">
         <button class="btn btn-primary" onclick="addCat()">添加</button>
       </div>
     </div>`;
@@ -1618,43 +1636,47 @@ async function renderAdminDashboard() {
   if(!state.user || state.user.role !== 'admin'){navigate('home');toast('⛔ 无权限','error');return;}
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>📊 数据看板</h1><div class="sub">站点运营数据总览</div></div>
+    <div class="admin-hero">
+      <h1>📊 数据看板</h1>
+      <div class="sub">站点运营数据总览 · 实时掌握平台动态</div>
+      <div class="hero-stats" id="hero-stats"><span>载入中...</span></div>
+    </div>
     ${adminTabs('dashboard')}
     <div id="dash-kpi"><div class="loading"><div class="spinner"></div></div></div>
-    <div style="margin:24px 0 12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <h2 style="font-size:1rem">📈 趋势</h2>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <select id="dash-metric" onchange="_dashMetric=this.value;loadDashChart()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:6px 10px;color:var(--text);font-size:.85rem">
+    <div class="section-head">
+      <h2>📈 趋势分析</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <select id="dash-metric" class="form-select" onchange="_dashMetric=this.value;loadDashChart()" style="width:auto">
           <option value="new_posts">新增内容</option>
           <option value="new_users">新增用户</option>
           <option value="dau">DAU</option>
         </select>
-        <select id="dash-days" onchange="_dashDays=parseInt(this.value);loadDashChart()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:6px 10px;color:var(--text);font-size:.85rem">
+        <select id="dash-days" class="form-select" onchange="_dashDays=parseInt(this.value);loadDashChart()" style="width:auto">
           <option value="7">7天</option>
           <option value="30" selected>30天</option>
           <option value="90">90天</option>
         </select>
       </div>
     </div>
-    <div id="dash-chart" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px;min-height:200px"><div class="loading"><div class="spinner"></div></div></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px">
+    <div id="dash-chart" class="chart-card"><div class="loading"><div class="spinner"></div></div></div>
+    <div class="dash-grid">
       <div>
-        <h2 style="font-size:1rem;margin-bottom:12px">🏆 热门内容 Top10</h2>
-        <div id="dash-top"><div class="loading"><div class="spinner"></div></div></div>
+        <div class="section-head"><h2>🏆 热门内容 Top10</h2></div>
+        <div id="dash-top" class="top-list"><div class="loading"><div class="spinner"></div></div></div>
       </div>
       <div>
-        <h2 style="font-size:1rem;margin-bottom:12px">🗂 分类分布</h2>
-        <div id="dash-cat"><div class="loading"><div class="spinner"></div></div></div>
+        <div class="section-head"><h2>🗂 分类分布</h2></div>
+        <div id="dash-cat" class="admin-card"><div class="loading"><div class="spinner"></div></div></div>
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px">
+    <div class="dash-grid">
       <div>
-        <h2 style="font-size:1rem;margin-bottom:12px">📊 完播率 Top10</h2>
-        <div id="dash-top-completion"><div class="loading"><div class="spinner"></div></div></div>
+        <div class="section-head"><h2>📊 完播率 Top10</h2></div>
+        <div id="dash-top-completion" class="top-list"><div class="loading"><div class="spinner"></div></div></div>
       </div>
       <div>
-        <h2 style="font-size:1rem;margin-bottom:12px">⏱ 播放时长趋势</h2>
-        <div id="dash-play-trend" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px;min-height:120px"><div class="loading"><div class="spinner"></div></div></div>
+        <div class="section-head"><h2>⏱ 播放时长趋势</h2></div>
+        <div id="dash-play-trend" class="chart-card"><div class="loading"><div class="spinner"></div></div></div>
       </div>
     </div>`;
   loadDashKpi();
@@ -1667,18 +1689,29 @@ async function renderAdminDashboard() {
 
 async function loadDashKpi() {
   const data = await api(`/api/admin/stats?range=${_dashRange}`)||{};
+  // Update hero stats
+  const heroEl = $('hero-stats');
+  if (heroEl) {
+    heroEl.innerHTML = `
+      <span>👤 总用户 <b>${data.total_users||0}</b></span>
+      <span>📚 总内容 <b>${data.total_posts||0}</b></span>
+      <span>▶️ 总播放 <b>${data.total_views||0}</b></span>
+      <span>👥 今日 DAU <b>${data.dau||0}</b></span>
+    `;
+  }
   const cards = [
-    {label:'DAU',value:data.dau||0,icon:'👥'},
-    {label:'新增用户',value:data.new_users||0,icon:'🆕'},
-    {label:'新增内容',value:data.new_posts||0,icon:'📦'},
-    {label:'总用户',value:data.total_users||0,icon:'👤'},
-    {label:'总内容',value:data.total_posts||0,icon:'📚'},
-    {label:'总播放',value:data.total_views||0,icon:'▶️'},
+    {label:'DAU',     value:data.dau||0,         icon:'👥'},
+    {label:'新增用户', value:data.new_users||0,   icon:'🆕'},
+    {label:'新增内容', value:data.new_posts||0,   icon:'📦'},
+    {label:'总用户',   value:data.total_users||0, icon:'👤'},
+    {label:'总内容',   value:data.total_posts||0, icon:'📚'},
+    {label:'总播放',   value:data.total_views||0, icon:'▶️'},
   ];
-  $('dash-kpi').innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">${cards.map(c=>`
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px">
-      <div style="font-size:.7rem;color:var(--text3)">${c.icon} ${c.label}</div>
-      <div style="font-size:1.6rem;font-weight:700;margin-top:4px">${c.value}</div>
+  $('dash-kpi').innerHTML = `<div class="kpi-grid">${cards.map(c=>`
+    <div class="kpi-card">
+      <div class="kpi-icon">${c.icon}</div>
+      <div class="kpi-label">${c.label}</div>
+      <div class="kpi-value">${c.value}</div>
     </div>`).join('')}</div>`;
 }
 
@@ -1688,31 +1721,36 @@ async function loadDashChart() {
   const el = $('dash-chart');
   const data = await api(`/api/admin/stats/timeseries?metric=${_dashMetric}&days=${_dashDays}`)||{};
   const series = data.series||[];
-  if(!series.length){el.innerHTML='<div class="empty"><p>暂无数据</p></div>';return;}
+  if(!series.length){el.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>暂无数据</p></div>';return;}
   const max = Math.max(1, ...series.map(s=>s.value));
   const w = 100, h = 120;
   const points = series.map((s,i)=>`${(i/(series.length-1||1))*w},${h-(s.value/max)*h}`).join(' ');
+  const total = series.reduce((a,s)=>a+s.value,0);
   el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:160px;display:block">
-    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="0.8"/>
+    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="0.8" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>
-  <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text3);margin-top:6px">
+  <div class="chart-footer">
     <span>${series[0].date}</span>
     <span>${series[series.length-1].date}</span>
   </div>
-  <div style="font-size:.75rem;color:var(--text3);margin-top:8px;text-align:center">峰值 ${max} · 合计 ${series.reduce((a,s)=>a+s.value,0)}</div>`;
+  <div class="chart-summary">峰值 ${max} · 合计 ${total}</div>`;
 }
 
 async function loadDashTop() {
   const data = await api('/api/admin/stats/top-posts?metric=views&limit=10')||{};
   const items = data.items||[];
   const el = $('dash-top');
-  if(!items.length){el.innerHTML='<div class="empty"><p>暂无内容</p></div>';return;}
+  if(!items.length){el.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>暂无内容</p></div>';return;}
   el.innerHTML = items.map((p,i)=>`
-    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">
-      <span style="font-weight:700;color:${i<3?'var(--accent)':'var(--text3)'};width:22px">${i+1}</span>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
-        <div style="font-size:.7rem;color:var(--text3)">${p.category?p.category.icon+' '+esc(p.category.name):''} · 👁${p.views} · ❤️${p.favorite_count}</div>
+    <div class="top-item">
+      <span class="rank ${i<3?'top3':''}">${i+1}</span>
+      <div class="info">
+        <div class="title">${esc(p.title)}</div>
+        <div class="meta">
+          <span>${p.category?p.category.icon+' '+esc(p.category.name):'—'}</span>
+          <span>👁 ${p.views}</span>
+          <span>❤️ ${p.favorite_count}</span>
+        </div>
       </div>
     </div>`).join('');
 }
@@ -1721,15 +1759,15 @@ async function loadDashCat() {
   const data = await api('/api/admin/stats/category-distribution')||{};
   const items = data.items||[];
   const el = $('dash-cat');
-  if(!items.length){el.innerHTML='<div class="empty"><p>暂无分类</p></div>';return;}
+  if(!items.length){el.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>暂无分类</p></div>';return;}
   const total = Math.max(1, items.reduce((a,c)=>a+c.post_count,0));
   el.innerHTML = items.map(c=>`
-    <div style="margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:3px">
+    <div class="dist-row">
+      <div class="dist-label">
         <span>${c.icon} ${esc(c.name)}</span>
-        <span style="color:var(--text3)">${c.post_count} · 👁${c.view_sum}</span>
+        <span style="color:var(--text3)">${c.post_count} 个 · 👁 ${c.view_sum}</span>
       </div>
-      <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden"><div style="background:var(--accent);height:100%;width:${(c.post_count/total)*100}%"></div></div>
+      <div class="dist-bar"><div class="dist-fill" style="width:${(c.post_count/total)*100}%"></div></div>
     </div>`).join('');
 }
 
@@ -1737,15 +1775,18 @@ async function loadDashTopCompletion() {
   const data = await api('/api/admin/stats/top-completion')||{};
   const items = data.items||[];
   const el = $('dash-top-completion');
-  if(!items.length){el.innerHTML='<div class="empty"><p>暂无数据</p></div>';return;}
+  if(!items.length){el.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>暂无数据</p></div>';return;}
   el.innerHTML = items.map((p,i)=>{
     const rate = p.avg_completion !== undefined ? p.avg_completion : (p.completion_rate !== undefined ? p.completion_rate : 0);
     const pct = (rate > 1 ? rate : rate * 100).toFixed(1);
-    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">
-      <span style="font-weight:700;color:${i<3?'var(--accent)':'var(--text3)'};width:22px">${i+1}</span>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
-        <div style="font-size:.7rem;color:var(--text3)">📊 ${pct}% · ▶️${p.play_count||0}</div>
+    return `<div class="top-item">
+      <span class="rank ${i<3?'top3':''}">${i+1}</span>
+      <div class="info">
+        <div class="title">${esc(p.title)}</div>
+        <div class="meta">
+          <span>📊 ${pct}%</span>
+          <span>▶️ ${p.play_count||0}</span>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -1756,19 +1797,19 @@ async function loadDashPlayTrend() {
   if (!el) return;
   const data = await api('/api/admin/stats/play-time-trend')||{};
   const series = data.series||data.items||[];
-  if(!series.length){el.innerHTML='<div class="empty"><p>暂无数据</p></div>';return;}
+  if(!series.length){el.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>暂无数据</p></div>';return;}
   const max = Math.max(1, ...series.map(s=>(s.value||s.play_time||s.seconds||0)));
   const w = 100, h = 120;
   const points = series.map((s,i)=>`${(i/(series.length-1||1))*w},${h-((s.value||s.play_time||s.seconds||0)/max)*h}`).join(' ');
   const total = series.reduce((a,s)=>a+(s.value||s.play_time||s.seconds||0),0);
   el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:140px;display:block">
-    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="0.8"/>
+    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="0.8" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>
-  <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text3);margin-top:6px">
+  <div class="chart-footer">
     <span>${series[0].date||''}</span>
     <span>${series[series.length-1].date||''}</span>
   </div>
-  <div style="font-size:.75rem;color:var(--text3);margin-top:8px;text-align:center">总播放时长 ${fdp(total)}</div>`;
+  <div class="chart-summary">总播放时长 ${fdp(total)}</div>`;
 }
 
 // ─── Admin Users (PRD-005) ───
@@ -1779,17 +1820,20 @@ async function renderAdminUsers() {
   if(!state.user || state.user.role !== 'admin'){navigate('home');toast('⛔ 无权限','error');return;}
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>👥 用户管理</h1><div class="sub">管理用户角色与状态</div></div>
+    <div class="admin-hero">
+      <h1>👥 用户管理</h1>
+      <div class="sub">管理用户角色与状态 · 控制平台访问权限</div>
+    </div>
     ${adminTabs('users')}
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <input id="user-search" placeholder="🔍 搜索用户名" value="${esc(_userFilter.search)}" onkeyup="if(event.key==='Enter'){_userFilter.search=this.value;_userPage=1;loadUserList()}" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem">
-      <select id="user-role" onchange="_userFilter.role=this.value;_userPage=1;loadUserList()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;color:var(--text);font-size:.85rem">
+      <input id="user-search" class="form-input" placeholder="🔍 搜索用户名" value="${esc(_userFilter.search)}" onkeyup="if(event.key==='Enter'){_userFilter.search=this.value;_userPage=1;loadUserList()}" style="flex:1;min-width:160px">
+      <select id="user-role" class="form-select" onchange="_userFilter.role=this.value;_userPage=1;loadUserList()" style="width:auto">
         <option value="">全部角色</option>
         <option value="admin">管理员</option>
         <option value="creator">创作者</option>
         <option value="user">普通用户</option>
       </select>
-      <select id="user-status" onchange="_userFilter.status=this.value;_userPage=1;loadUserList()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;color:var(--text);font-size:.85rem">
+      <select id="user-status" class="form-select" onchange="_userFilter.status=this.value;_userPage=1;loadUserList()" style="width:auto">
         <option value="">全部状态</option>
         <option value="active">正常</option>
         <option value="banned">封禁</option>
@@ -1809,33 +1853,38 @@ async function loadUserList() {
   const data = await api(`/api/admin/users?${params}`)||{};
   const el = $('user-list');
   const users = data.items||[];
-  if(!users.length){el.innerHTML='<div class="empty"><div class="icon">👤</div><p>没有用户</p></div>';return;}
-  el.innerHTML = users.map(u=>`
-    <div style="display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:8px">
+  if(!users.length){el.innerHTML='<div class="empty-state"><div class="icon">👤</div><p>没有用户</p></div>';return;}
+  el.innerHTML = users.map(u=>{
+    const roleBadge = u.role==='admin' ? '<span class="badge badge-admin">👑 管理员</span>'
+                    : u.role==='creator' ? '<span class="badge badge-creator">🎨 创作者</span>'
+                    : '<span class="badge badge-user">👤 普通用户</span>';
+    const statusBadge = u.status==='banned' ? '<span class="badge badge-banned">🚫 封禁</span>' : '<span class="badge badge-active">✓ 正常</span>';
+    return `<div class="admin-row">
       <div style="width:36px;height:36px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">${u.role==='admin'?'👑':u.role==='creator'?'🎨':'👤'}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:.9rem">${esc(u.username)} ${u.id===state.user.id?'<span style="font-size:.7rem;color:var(--text3)">（你）</span>':''}</div>
-        <div style="font-size:.7rem;color:var(--text3);margin-top:2px">
-          <span style="color:${u.role==='admin'?'#f59e0b':u.role==='creator'?'#10b981':'var(--text3)'}">${u.role==='admin'?'管理员':u.role==='creator'?'创作者':'普通用户'}</span>
-          · ${u.status==='banned'?'<span style="color:#ef4444">封禁</span>':'正常'}
-          · ${u.post_count} 个内容
-          · ${u.last_login_at?dt(u.last_login_at)+'登录':'未登录'}
+      <div class="row-main">
+        <div class="row-title">${esc(u.username)} ${u.id===state.user.id?'<span style="font-size:.7rem;color:var(--text3)">（你）</span>':''}</div>
+        <div class="row-meta">
+          ${roleBadge}
+          ${statusBadge}
+          <span>📦 ${u.post_count} 个内容</span>
+          <span>📅 ${u.last_login_at?dt(u.last_login_at)+'登录':'未登录'}</span>
         </div>
       </div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        <select onchange="changeUserRole(${u.id},this.value)" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:6px 8px;color:var(--text);font-size:.75rem" ${u.id===state.user.id?'disabled':''}>
+      <div class="row-actions">
+        <select class="form-select" onchange="changeUserRole(${u.id},this.value)" style="width:auto;padding:5px 8px;font-size:.75rem" ${u.id===state.user.id?'disabled':''}>
           <option value="user" ${u.role==='user'?'selected':''}>普通</option>
           <option value="creator" ${u.role==='creator'?'selected':''}>创作者</option>
           <option value="admin" ${u.role==='admin'?'selected':''}>管理员</option>
         </select>
-        <button class="btn btn-ghost btn-icon" onclick="toggleUserStatus(${u.id},'${u.status}')" title="${u.status==='banned'?'解封':'封禁'}" ${u.id===state.user.id?'disabled':''}>${u.status==='banned'?'🔓':'🚫'}</button>
-        <button class="btn btn-ghost btn-icon" onclick="resetUserPwd(${u.id})" title="重置密码">🔑</button>
+        <button class="btn btn-secondary" onclick="toggleUserStatus(${u.id},'${u.status}')" title="${u.status==='banned'?'解封':'封禁'}" ${u.id===state.user.id?'disabled':''} style="padding:6px 10px;font-size:.8rem">${u.status==='banned'?'🔓':'🚫'}</button>
+        <button class="btn btn-secondary" onclick="resetUserPwd(${u.id})" title="重置密码" style="padding:6px 10px;font-size:.8rem">🔑</button>
       </div>
-    </div>`).join('') + `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:.8rem;color:var(--text3)">
-      <button class="btn btn-secondary" onclick="_userPage--;loadUserList()" ${_userPage<=1?'disabled':''}>上一页</button>
+    </div>`;
+  }).join('') + `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;font-size:.8rem;color:var(--text3)">
+      <button class="btn btn-secondary" onclick="_userPage--;loadUserList()" ${_userPage<=1?'disabled':''}>← 上一页</button>
       <span>第 ${data.page} / ${data.total_pages} 页 · 共 ${data.total} 用户</span>
-      <button class="btn btn-secondary" onclick="_userPage++;loadUserList()" ${_userPage>=data.total_pages?'disabled':''}>下一页</button>
+      <button class="btn btn-secondary" onclick="_userPage++;loadUserList()" ${_userPage>=data.total_pages?'disabled':''}>下一页 →</button>
     </div>`;
 }
 
@@ -1865,43 +1914,80 @@ async function renderAdminSettings() {
   if(!state.user || state.user.role !== 'admin'){navigate('home');toast('⛔ 无权限','error');return;}
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>⚙️ 系统设置</h1><div class="sub">站点配置（修改后即时生效）</div></div>
+    <div class="admin-hero">
+      <h1>⚙️ 系统设置</h1>
+      <div class="sub">站点配置 · 修改后即时生效</div>
+    </div>
     ${adminTabs('settings')}
     <div id="settings-form"><div class="loading"><div class="spinner"></div></div></div>`;
   const s = await api('/api/admin/settings')||{};
   $('settings-form').innerHTML = `
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:20px;margin-bottom:16px">
-      <h2 style="font-size:.95rem;margin-bottom:14px">🌐 站点信息</h2>
-      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">站点名称</span>
-        <input id="set-site_name" value="${esc(s.site_name||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
-      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">站点描述</span>
-        <input id="set-site_description" value="${esc(s.site_description||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
-      <label style="display:block"><span style="font-size:.8rem;color:var(--text3)">页脚文字</span>
-        <input id="set-footer_text" value="${esc(s.footer_text||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+    <div class="form-section">
+      <h2>🌐 站点信息</h2>
+      <label class="form-label"><span>站点名称</span>
+        <input id="set-site_name" class="form-input" value="${esc(s.site_name||'')}"></label>
+      <label class="form-label"><span>站点描述</span>
+        <input id="set-site_description" class="form-input" value="${esc(s.site_description||'')}"></label>
+      <label class="form-label" style="margin-bottom:0"><span>页脚文字</span>
+        <input id="set-footer_text" class="form-input" value="${esc(s.footer_text||'')}"></label>
     </div>
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:20px;margin-bottom:16px">
-      <h2 style="font-size:.95rem;margin-bottom:14px">🔒 注册与权限</h2>
-      <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer">
-        <input type="checkbox" id="set-registration_enabled" ${s.registration_enabled==='true'?'checked':''} style="width:18px;height:18px">
-        <span style="font-size:.85rem">允许新用户注册</span>
+    <div class="form-section">
+      <h2>🔒 注册与权限</h2>
+      <label class="form-checkbox-label">
+        <input type="checkbox" id="set-registration_enabled" ${s.registration_enabled==='true'?'checked':''}>
+        <span>允许新用户注册</span>
       </label>
-      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">新用户默认角色</span>
-        <select id="set-default_user_role" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px">
+      <label class="form-label" style="margin-bottom:0"><span>新用户默认角色</span>
+        <select id="set-default_user_role" class="form-select">
           <option value="user" ${s.default_user_role==='user'?'selected':''}>普通用户（只能浏览播放）</option>
           <option value="creator" ${s.default_user_role==='creator'?'selected':''}>创作者（可上传内容）</option>
         </select></label>
     </div>
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:20px;margin-bottom:16px">
-      <h2 style="font-size:.95rem;margin-bottom:14px">📦 上传限制</h2>
-      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">单文件最大上传（MB）</span>
-        <input id="set-max_upload_size_mb" type="number" min="1" max="10240" value="${esc(s.max_upload_size_mb||'500')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
-      <div style="background:var(--bg3);border-radius:var(--rs);padding:10px 12px;font-size:.75rem;color:var(--text3)">
+    <div class="form-section">
+      <h2>📦 上传限制</h2>
+      <label class="form-label"><span>单文件最大上传（MB）</span>
+        <input id="set-max_upload_size_mb" class="form-input" type="number" min="1" max="10240" value="${esc(s.max_upload_size_mb||'500')}"></label>
+      <div class="form-hint" style="background:var(--bg3);border-radius:var(--rs);padding:10px 12px;margin-top:4px">
         <div>视频格式: ${esc(s.allowed_video_exts||'')}</div>
         <div>音频格式: ${esc(s.allowed_audio_exts||'')}</div>
       </div>
     </div>
+    <div class="form-section">
+      <h2>💾 存储设置</h2>
+      <label class="form-label"><span>存储后端</span>
+        <select id="set-storage_backend" class="form-select" onchange="updateStorageFormVisibility()">
+          <option value="local" ${s.storage_backend==='local'?'selected':''}>本地存储（默认）</option>
+          <option value="s3" ${s.storage_backend==='s3'?'selected':''}>S3 兼容存储</option>
+        </select></label>
+      <div id="s3-config-section" style="${s.storage_backend==='s3'?'':'display:none'}">
+        <label class="form-label"><span>存储服务提供商</span>
+          <select id="set-storage_provider" class="form-select" onchange="updateStorageProviderHint()">
+            <option value="aws" ${s.storage_provider==='aws'?'selected':''}>AWS S3</option>
+            <option value="aliyun" ${s.storage_provider==='aliyun'?'selected':''}>阿里云 OSS</option>
+            <option value="minio" ${s.storage_provider==='minio'?'selected':''}>MinIO</option>
+            <option value="custom" ${s.storage_provider==='custom'||!s.storage_provider?'selected':''}>自定义 S3 兼容</option>
+          </select></label>
+        <label class="form-label"><span>Region（区域）</span>
+          <input id="set-s3_region" class="form-input" value="${esc(s.s3_region||'')}" placeholder="us-east-1 / oss-cn-hangzhou 等">
+          <div id="storage-region-hint" class="form-hint"></div></label>
+        <label class="form-label"><span>Endpoint（端点，MinIO/自定义必填）</span>
+          <input id="set-s3_endpoint" class="form-input" value="${esc(s.s3_endpoint||'')}" placeholder="http://minio:9000"></label>
+        <label class="form-label"><span>Bucket（存储桶）</span>
+          <input id="set-s3_bucket" class="form-input" value="${esc(s.s3_bucket||'')}"></label>
+        <label class="form-label"><span>Access Key</span>
+          <input id="set-s3_access_key" class="form-input" value="${esc(s.s3_access_key||'')}"></label>
+        <label class="form-label"><span>Secret Key</span>
+          <input id="set-s3_secret_key" class="form-input" type="password" value="${esc(s.s3_secret_key||'')}"></label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button type="button" class="btn btn-secondary" onclick="testStorageConnection()" style="flex:1">🔌 测试连接</button>
+          <button type="button" class="btn btn-secondary" onclick="migrateStorage()" style="flex:1">⬆️ 迁移本地文件到 S3</button>
+        </div>
+        <div id="storage-test-result" style="font-size:.8rem;padding:10px 14px;border-radius:var(--rs);background:var(--bg3);color:var(--text3);min-height:20px;border:1px solid var(--border)">点击「测试连接」验证配置</div>
+      </div>
+    </div>
     ${s._secret_key_is_default==='true'?'<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:var(--rs);padding:12px 16px;margin-bottom:16px;font-size:.8rem;color:#92400e">⚠️ 安全提示：当前使用默认 SECRET_KEY，请通过环境变量 <code>MURMUR_SECRET_KEY</code> 修改后再部署到生产环境</div>':''}
-    <button class="btn btn-primary" onclick="saveSettings()" style="width:100%">💾 保存设置</button>`;
+    <button class="btn btn-primary" onclick="saveSettings()" style="width:100%;padding:12px;font-size:.95rem">💾 保存设置</button>`;
+  updateStorageProviderHint();
 }
 
 async function saveSettings() {
@@ -1912,10 +1998,62 @@ async function saveSettings() {
     registration_enabled: $('set-registration_enabled').checked?'true':'false',
     default_user_role: $('set-default_user_role').value,
     max_upload_size_mb: $('set-max_upload_size_mb').value,
+    storage_backend: $('set-storage_backend').value,
+    storage_provider: $('set-storage_provider').value,
+    s3_endpoint: $('set-s3_endpoint').value,
+    s3_bucket: $('set-s3_bucket').value,
+    s3_access_key: $('set-s3_access_key').value,
+    s3_secret_key: $('set-s3_secret_key').value,
+    s3_region: $('set-s3_region').value,
   };
   const r = await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(data)});
   if(r?.ok){toast('✅ 设置已保存','success');renderAdminSettings();}
   else toast(r?.detail||'保存失败','error');
+}
+
+function updateStorageFormVisibility() {
+  const be = $('set-storage_backend')?.value || 'local';
+  const sec = $('s3-config-section');
+  if(sec) sec.style.display = (be === 's3') ? 'block' : 'none';
+  updateStorageProviderHint();
+}
+
+function updateStorageProviderHint() {
+  const prov = $('set-storage_provider')?.value || 'custom';
+  const hint = $('storage-region-hint');
+  if(!hint) return;
+  const hintMap = {
+    aws: '如 us-east-1, us-west-2, ap-northeast-1',
+    aliyun: '如 oss-cn-hangzhou, oss-cn-beijing, oss-cn-shenzhen',
+    minio: 'MinIO 通常不需要 Region，留空即可',
+    custom: '服务支持 region 则填写，否则留空',
+  };
+  hint.textContent = hintMap[prov] || '';
+}
+
+async function testStorageConnection() {
+  const box = $('storage-test-result');
+  if(box) box.textContent = '⏳ 正在测试...';
+  const r = await api('/api/admin/storage/test', {method:'POST'});
+  if(!box) return;
+  if(r?.ok){
+    const d = r.details || {};
+    box.style.color = 'var(--success,#10b981)';
+    box.textContent = `✅ 连接成功（${d.provider||d.backend||'s3'}）bucket=${d.bucket||''}  region=${d.region||''}  对象采样=${d.object_count_sample??'N/A'}`;
+  } else {
+    box.style.color = 'var(--danger,#ef4444)';
+    box.textContent = `❌ 连接失败：${r?.error||'未知错误'}`;
+  }
+}
+
+async function migrateStorage() {
+  if(!confirm('确定要将本地媒体文件迁移到 S3 吗？已有文件会被覆盖。')) return;
+  const r = await api('/api/admin/storage/migrate', {method:'POST'});
+  if(r?.migrated !== undefined){
+    toast(`迁移完成：成功 ${r.migrated} 个，失败 ${r.failed} 个`, r.failed > 0 ? 'warning' : 'success');
+  } else {
+    toast(r?.detail||'迁移失败','error');
+  }
 }
 
 // ─── Sleep Timer ───
@@ -2563,36 +2701,35 @@ async function renderAdminReports() {
   if (!state.user || state.user.role !== 'admin') { navigate('home'); toast('⛔ 无权限', 'error'); return; }
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>🚩 举报队列</h1><div class="sub">处理用户举报内容</div></div>
+    <div class="admin-hero">
+      <h1>🚩 举报队列</h1>
+      <div class="sub">处理用户举报内容 · 维护社区健康</div>
+    </div>
     ${adminTabs('reports')}
     <div id="reports-list"><div class="loading"><div class="spinner"></div></div></div>`;
   const data = await api('/api/admin/reports?status=pending') || {};
   const items = data.items || data || [];
   const list = $('reports-list');
   if (!Array.isArray(items) || !items.length) {
-    list.innerHTML = '<div class="empty"><div class="icon">✅</div><p>暂无待处理举报</p></div>';
+    list.innerHTML = '<div class="empty-state"><div class="icon">✅</div><p>暂无待处理举报</p></div>';
     return;
   }
   list.innerHTML = items.map(r => {
     const targetType = r.target_type === 'post' ? '📝 内容' : '💬 评论';
     const summary = r.target_title || r.target_content || r.target_summary || `#${r.target_id}`;
     const reporter = r.reporter?.username || r.reporter_name || '匿名';
-    return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 16px;margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
-        <div style="flex:1;min-width:200px">
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
-            <span style="font-size:.75rem;background:var(--bg3);padding:2px 8px;border-radius:4px">${targetType}</span>
-            <span style="font-size:.8rem;color:var(--text3)">👤 ${esc(reporter)}</span>
-            <span style="font-size:.75rem;color:var(--text3)">${dt(r.created_at)}</span>
-          </div>
-          <div style="font-size:.85rem;font-weight:600;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(summary)}</div>
-          <div style="font-size:.8rem;color:var(--text2);background:var(--bg3);padding:8px 10px;border-radius:6px;margin-top:6px">${esc(r.reason || '未提供理由')}</div>
-        </div>
+    return `<div class="admin-card" style="margin-bottom:10px;padding:14px 16px">
+      <div class="row-meta" style="margin-bottom:6px">
+        <span class="badge badge-user">${targetType}</span>
+        <span>👤 ${esc(reporter)}</span>
+        <span>📅 ${dt(r.created_at)}</span>
       </div>
-      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
-        <button class="btn btn-secondary" style="color:#f87171" onclick="handleReport(${r.id},'delete_content')">🗑 删除内容</button>
-        <button class="btn btn-secondary" style="color:#f59e0b" onclick="handleReport(${r.id},'ban_user')">🚫 封禁用户</button>
-        <button class="btn btn-ghost" onclick="handleReport(${r.id},'none')">✕ 驳回</button>
+      <div class="row-title" style="margin-bottom:6px">${esc(summary)}</div>
+      <div style="font-size:.8rem;color:var(--text2);background:var(--bg3);padding:8px 10px;border-radius:6px;border-left:3px solid var(--accent)">💬 ${esc(r.reason || '未提供理由')}</div>
+      <div class="row-actions" style="margin-top:10px">
+        <button class="btn btn-secondary" style="color:#f87171;padding:6px 10px;font-size:.8rem" onclick="handleReport(${r.id},'delete_content')">🗑 删除内容</button>
+        <button class="btn btn-secondary" style="color:#f59e0b;padding:6px 10px;font-size:.8rem" onclick="handleReport(${r.id},'ban_user')">🚫 封禁用户</button>
+        <button class="btn btn-ghost" style="padding:6px 10px;font-size:.8rem" onclick="handleReport(${r.id},'none')">✕ 驳回</button>
       </div>
     </div>`;
   }).join('');
@@ -2633,10 +2770,13 @@ async function renderAdminTranscode() {
   if (!state.user || state.user.role !== 'admin') { navigate('home'); toast('⛔ 无权限', 'error'); return; }
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>🎬 转码队列</h1><div class="sub">监控转码任务状态</div></div>
+    <div class="admin-hero">
+      <h1>🎬 转码队列</h1>
+      <div class="sub">监控转码任务状态 · 自动重试机制保障</div>
+    </div>
     ${adminTabs('transcode')}
     <div id="transcode-status"><div class="loading"><div class="spinner"></div></div></div>
-    <h2 style="font-size:1rem;margin:20px 0 12px">📋 任务列表</h2>
+    <div class="section-head"><h2>📋 任务列表</h2></div>
     <div id="transcode-list"><div class="loading"><div class="spinner"></div></div></div>`;
   loadTranscodeStatus();
   loadTranscodeList();
@@ -2655,10 +2795,10 @@ async function loadTranscodeStatus() {
   const processing = data.processing || 0;
   const failed = data.failed || 0;
   const done = data.done || data.ready || 0;
-  el.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap">
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700;color:#f59e0b">${processing}</div><div style="font-size:.75rem;color:var(--text3)">⏳ 处理中</div></div>
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700;color:#ef4444">${failed}</div><div style="font-size:.75rem;color:var(--text3)">❌ 失败</div></div>
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700;color:#10b981">${done}</div><div style="font-size:.75rem;color:var(--text3)">✅ 已完成</div></div>
+  el.innerHTML = `<div class="kpi-grid" style="margin-bottom:18px">
+    <div class="kpi-card"><div class="kpi-value" style="color:#f59e0b">${processing}</div><div class="kpi-label">⏳ 处理中</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:#ef4444">${failed}</div><div class="kpi-label">❌ 失败</div></div>
+    <div class="kpi-card"><div class="kpi-value" style="color:#10b981">${done}</div><div class="kpi-label">✅ 已完成</div></div>
   </div>`;
 }
 
@@ -2668,25 +2808,27 @@ async function loadTranscodeList() {
   const data = await api('/api/admin/transcode/list') || {};
   const items = data.items || data || [];
   if (!Array.isArray(items) || !items.length) {
-    el.innerHTML = '<div class="empty"><div class="icon">🎬</div><p>暂无转码任务</p></div>';
+    el.innerHTML = '<div class="empty-state"><div class="icon">🎬</div><p>暂无转码任务</p></div>';
     return;
   }
   el.innerHTML = items.map(p => {
     const status = p.status || p.transcode_status || 'unknown';
+    const badgeClass = status === 'processing' ? 'badge-processing' : status === 'failed' ? 'badge-failed' : 'badge-ready';
     const statusText = status === 'processing' ? '⏳ 处理中' : status === 'failed' ? '❌ 失败' : status === 'ready' || status === 'done' ? '✅ 已完成' : status;
-    const statusColor = status === 'processing' ? '#f59e0b' : status === 'failed' ? '#ef4444' : '#10b981';
-    return `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:8px">
-      <div style="font-size:1.5rem;opacity:.5;flex-shrink:0">${p.file_type === 'video' ? '🎬' : '🎵'}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
-        <div style="font-size:.75rem;color:var(--text3);margin-top:2px">
-          ${p.duration > 0 ? dur(p.duration) + ' · ' : ''}${fs(p.file_size)} · 👁${p.views || 0}
+    return `<div class="admin-row">
+      <div class="row-icon">${p.file_type === 'video' ? '🎬' : '🎵'}</div>
+      <div class="row-main">
+        <div class="row-title">${esc(p.title)}</div>
+        <div class="row-meta">
+          <span class="badge ${badgeClass}">${statusText}</span>
+          ${p.duration > 0 ? `<span>⏱ ${dur(p.duration)}</span>` : ''}
+          <span>📦 ${fs(p.file_size)}</span>
+          <span>👁 ${p.views || 0}</span>
         </div>
       </div>
-      <span style="font-size:.8rem;color:${statusColor};font-weight:600;flex-shrink:0">${statusText}</span>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        ${status === 'failed' ? `<button class="btn btn-ghost" onclick="retryTranscode(${p.id})">🔄 重试</button>` : ''}
-        <button class="btn btn-ghost" onclick="navigate('post',${p.id})">👁 查看</button>
+      <div class="row-actions">
+        ${status === 'failed' ? `<button class="btn btn-ghost" style="padding:6px 10px;font-size:.8rem" onclick="retryTranscode(${p.id})">🔄 重试</button>` : ''}
+        <button class="btn btn-ghost" style="padding:6px 10px;font-size:.8rem" onclick="navigate('post',${p.id})">👁 查看</button>
       </div>
     </div>`;
   }).join('');
