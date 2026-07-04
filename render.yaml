@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: murmur-backend
+    runtime: docker
+    plan: free
+    envVars:
+      - key: ASMR_SECRET_KEY
+        generateValue: true
+      - key: PORT
+        value: "8000"
+    disk:
+      name: murmur-data
+      mountPath: /app/data
+      sizeGB: 1
+    autoDeploy: true

@@ -1,4 +1,8 @@
-const API = '';
+const API = (function() {
+  if (typeof window !== 'undefined' && window.__API_BASE__) return window.__API_BASE__;
+  if (typeof window !== 'undefined' && window.location && window.location && window.location.port === '5173') return 'http://localhost:8000';
+  return '';
+})();
 const TK = 'asmr_token';
 const TT = 'asmr_theme';
 const TA = 'asmr_accent';

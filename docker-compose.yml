@@ -1,0 +1,13 @@
+services:
+  murmur:
+    build: .
+    container_name: murmur
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ASMR_SECRET_KEY=change-me-to-a-random-string
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+      - ./uploads:/app/uploads

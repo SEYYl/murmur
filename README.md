@@ -357,7 +357,50 @@ murmur/
 
 ## 部署
 
-### 使用 systemd（推荐）
+### 方案 A：Cloudflare Pages + 后端分离（低成本尝鲜）⭐
+
+前端托管在 Cloudflare Pages（免费），后端部署在 Render/Railway（免费额度）。
+
+**总成本**：$0 ~ $7/月
+
+**第 1 步：部署后端**
+
+推荐 Render（一键部署）：
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+
+或手动部署：
+1. Fork 本仓库
+2. 在 [Render](https://render.com) 新建 Web Service
+3. 选择你的仓库，Runtime 选 Docker
+4. 环境变量添加：`ASMR_SECRET_KEY`（随便一串随机字符）
+5. 部署完成后记录后端地址，如 `https://murmur-backend.onrender.com`
+
+> **注意**：Render 免费版 15 分钟无流量会休眠，首次访问需要等几秒唤醒。
+> 如需持久化存储（SQLite 数据库不丢），需加 Disk（$0.25/GB/月），挂在 `/app/data`。
+
+**第 2 步：部署前端到 Cloudflare Pages**
+
+1. 登录 [Cloudflare Pages](https://pages.cloudflare.com)
+2. 点击 "Create a project" → "Connect to Git"
+3. 选择你的仓库
+4. 构建设置：
+   - **Build command**: `python scripts/build_pages.py`
+   - **Build output directory**: `dist`
+5. 环境变量添加：
+   - `API_BASE_URL` = `https://你的后端地址`（第 1 步得到的地址）
+   - `PYTHON_VERSION` = `3.11`
+6. 点击 "Save and Deploy"
+
+部署完成后会得到一个 `*.pages.dev` 的域名，访问即可使用。
+
+---
+
+### 方案 B：VPS 服务器（推荐长期运营）
+
+详见下方 systemd / Docker / Nginx 配置。
+
+### 使用 systemd
 
 ```ini
 [Unit]
