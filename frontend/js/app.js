@@ -64,8 +64,9 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s || 
 function dur(s) { if(!s||s<=0) return ''; const m=Math.floor(s/60),s2=Math.floor(s%60); return `${m}:${String(s2).padStart(2,'0')}`; }
 function fs(b) { if(!b) return ''; if(b<1024) return `${b}B`; if(b<1048576) return `${(b/1024).toFixed(0)}KB`; return `${(b/1048576).toFixed(1)}MB`; }
 function dt(d) { if(!d) return ''; const t=new Date(d),n=new Date(),diff=n-t; if(diff<6e4) return '刚刚'; if(diff<36e5) return `${Math.floor(diff/6e4)}分钟前`; if(diff<864e5) return `${Math.floor(diff/36e5)}小时前`; return `${t.getMonth()+1}/${t.getDate()}`; }
+function fdp(s) { if(!s||s<=0) return '0分钟'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); if(h>0) return `${h}小时${m}分钟`; return `${m}分钟`; }
 
-let state = { view:'home', postId:null, cat:null, sort:'latest', search:'', page:1, user:null, params:{} };
+let state = { view:'home', postId:null, cat:null, sort:'latest', search:'', page:1, user:null, params:{}, currentSessionId:null };
 let _deferredPrompt = null;
 
 function toast(msg, t='info') {
@@ -195,6 +196,8 @@ function navigate(view, data) {
   else if (view==='admin-dashboard') renderAdminDashboard();
   else if (view==='admin-users') renderAdminUsers();
   else if (view==='admin-settings') renderAdminSettings();
+  else if (view==='admin-reports') renderAdminReports();
+  else if (view==='admin-transcode') renderAdminTranscode();
   else if (view==='favorites') renderFavorites();
   else if (view==='history') renderHistory();
   else if (view==='tag-posts') renderTagPosts();
@@ -440,6 +443,7 @@ function vshow(id) {
 }
 
 // ─── Post Detail ───
+let _postPollTimer = null;
 async function renderPost() {
   const con = $('content'); con.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const p = await api(`/api/posts/${state.postId}`);
@@ -450,6 +454,42 @@ async function renderPost() {
       <div class="empty"><div class="icon">🔒</div><p style="font-size:1.1rem;margin-bottom:4px">观看视频需要登录</p>
       <p style="color:var(--text3);font-size:.85rem;margin-bottom:16px">登录后即可播放所有视频内容</p>
       <button class="btn btn-primary" onclick="showLogin()">去登录</button></div>`;
+    return;
+  }
+  // PRD-018: Transcode status handling
+  if (p.status === 'processing') {
+    const isAdmin = state.user && state.user.role === 'admin';
+    con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+      <div class="detail"><div class="info" style="text-align:center;padding:40px 20px">
+        <div style="font-size:3rem;margin-bottom:16px">⏳</div>
+        <h1 style="margin-bottom:8px">${esc(p.title)}</h1>
+        <p style="color:var(--text3);margin-bottom:20px">转码处理中，请稍后刷新查看...</p>
+        <button class="btn btn-primary" onclick="renderPost()">🔄 刷新状态</button>
+        ${isAdmin?`<button class="btn btn-secondary" onclick="navigate('admin-transcode')">🎬 查看转码队列</button>`:''}
+      </div></div>`;
+    if (_postPollTimer) clearInterval(_postPollTimer);
+    _postPollTimer = setInterval(async () => {
+      if (state.view !== 'post' || state.postId !== p.id) { clearInterval(_postPollTimer); _postPollTimer = null; return; }
+      const pp = await api(`/api/posts/${p.id}`);
+      if (pp && pp.status !== 'processing') {
+        clearInterval(_postPollTimer); _postPollTimer = null;
+        renderPost();
+      }
+    }, 5000);
+    return;
+  }
+  if (p.status === 'failed') {
+    const isAdmin = state.user && state.user.role === 'admin';
+    const isOwner = state.user && p.user && p.user.id === state.user.id;
+    const canRetry = isAdmin || isOwner;
+    con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+      <div class="detail"><div class="info" style="text-align:center;padding:40px 20px">
+        <div style="font-size:3rem;margin-bottom:16px">❌</div>
+        <h1 style="margin-bottom:8px">${esc(p.title)}</h1>
+        <p style="color:#ef4444;margin-bottom:20px">转码失败，内容无法播放</p>
+        ${canRetry?`<button class="btn btn-primary" onclick="retryTranscode(${p.id})">🔄 重试转码</button>`:''}
+        ${isAdmin?`<button class="btn btn-secondary" onclick="navigate('admin-transcode')">🎬 转码队列</button>`:''}
+      </div></div>`;
     return;
   }
   const pid = state.postId;
@@ -569,12 +609,14 @@ async function renderPost() {
           </button>
           <button class="btn btn-secondary" onclick="addToQueue({id:${pid},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">➕ 加入队列</button>
           ${state.user?`<button class="btn btn-secondary" onclick="showAddToPlaylist(${pid})">🎵 加到歌单</button>`:''}
+          ${state.user?`<button class="btn btn-secondary" onclick="showReportDialog('post',${pid})">🚩 举报</button>`:''}
           ${isAdmin?`<button class="btn ${p.featured?'btn-primary':'btn-secondary'}" id="feat-btn" onclick="toggleFeatured(${pid},${p.featured})">
             ${p.featured?'⭐ 已精选':'☆ 加精'}
           </button>`:''}
           ${canEdit?`<button class="btn btn-secondary" onclick="navigate('edit',${pid})">✏️ 编辑</button>`:''}
           ${canEdit?`<button class="btn btn-secondary" style="color:#f87171" onclick="deletePost(${pid})">🗑 删除</button>`:''}
         </div>
+        <div id="post-stats" style="margin-top:12px;font-size:.8rem;color:var(--text3);display:flex;gap:14px;flex-wrap:wrap"></div>
       </div>
     </div>
     <div id="related-section" style="margin-top:24px;display:none">
@@ -610,6 +652,7 @@ async function renderPost() {
       method:'POST',
       body: JSON.stringify({position: pos, duration: dur})
     });
+    if (state.currentSessionId) updatePlaySession(pid, Math.floor(pos||0));
   }
   function startHeartbeat(getPos, getDur) {
     if(heartbeatTimer) clearInterval(heartbeatTimer);
@@ -692,17 +735,20 @@ async function renderPost() {
         vupdateUI(pid);
         startHeartbeat(()=>v.currentTime, ()=>v.duration);
         updateMediaSessionState(true);
+        if (!state.currentSessionId) startPlaySession(pid);
       });
       v.addEventListener('pause', () => {
         vupdateUI(pid);
         stopHeartbeat();
         sendHeartbeat(v.currentTime, v.duration);
         updateMediaSessionState(false);
+        if (state.currentSessionId) endPlaySession(pid, Math.floor(v.currentTime||0), Math.floor(v.duration||0));
       });
       v.addEventListener('ended', () => {
         vupdateUI(pid);
         stopHeartbeat();
         clearPosition(pid);
+        if (state.currentSessionId) endPlaySession(pid, Math.floor(v.currentTime||0), Math.floor(v.duration||0));
         handlePlaybackEnded(pid, v);
       });
     }
@@ -732,17 +778,20 @@ async function renderPost() {
         aupdateUI(pid);
         startHeartbeat(()=>a.currentTime, ()=>a.duration);
         updateMediaSessionState(true);
+        if (!state.currentSessionId) startPlaySession(pid);
       });
       a.addEventListener('pause', () => {
         aupdateUI(pid);
         stopHeartbeat();
         sendHeartbeat(a.currentTime, a.duration);
         updateMediaSessionState(false);
+        if (state.currentSessionId) endPlaySession(pid, Math.floor(a.currentTime||0), Math.floor(a.duration||0));
       });
       a.addEventListener('ended', () => {
         aupdateUI(pid);
         stopHeartbeat();
         clearPosition(pid);
+        if (state.currentSessionId) endPlaySession(pid, Math.floor(a.currentTime||0), Math.floor(a.duration||0));
         handlePlaybackEnded(pid, a);
       });
       const apo = document.getElementById(`apo-${pid}`);
@@ -755,6 +804,25 @@ async function renderPost() {
   }
   loadRelated(pid);
   loadComments(pid);
+  loadPostStats(pid);
+}
+
+async function loadPostStats(postId) {
+  const el = $('post-stats');
+  if (!el) return;
+  const data = await api(`/api/posts/${postId}/stats`) || {};
+  const parts = [];
+  if (data.total_play_time || data.total_play_seconds) {
+    parts.push(`⏱ 总播放时长 ${fdp(data.total_play_time || data.total_play_seconds)}`);
+  }
+  if (data.avg_completion !== undefined || data.completion_rate !== undefined) {
+    const rate = data.avg_completion !== undefined ? data.avg_completion : data.completion_rate;
+    const pct = (rate > 1 ? rate : rate * 100).toFixed(1);
+    parts.push(`📊 平均完播率 ${pct}%`);
+  }
+  if (data.play_count !== undefined) parts.push(`▶️ 播放次数 ${data.play_count}`);
+  if (data.session_count !== undefined) parts.push(`🎬 播放会话 ${data.session_count}`);
+  el.innerHTML = parts.length ? parts.join(' · ') : '';
 }
 async function loadAndSetupSubtitles(pid, isVideo) {
   const subs = await api(`/api/posts/${pid}/subtitles`) || [];
@@ -1343,6 +1411,8 @@ function adminTabs(active) {
   return `<div class="admin-tabs" style="display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);overflow-x:auto">
     <button class="admin-tab ${active==='dashboard'?'active':''}" onclick="navigate('admin-dashboard')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='dashboard'?'var(--accent)':'transparent'};color:${active==='dashboard'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">📊 数据看板</button>
     <button class="admin-tab ${active==='content'?'active':''}" onclick="navigate('admin')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='content'?'var(--accent)':'transparent'};color:${active==='content'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">📦 内容管理</button>
+    <button class="admin-tab ${active==='transcode'?'active':''}" onclick="navigate('admin-transcode')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='transcode'?'var(--accent)':'transparent'};color:${active==='transcode'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">🎬 转码队列</button>
+    <button class="admin-tab ${active==='reports'?'active':''}" onclick="navigate('admin-reports')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='reports'?'var(--accent)':'transparent'};color:${active==='reports'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">🚩 举报队列</button>
     <button class="admin-tab ${active==='users'?'active':''}" onclick="navigate('admin-users')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='users'?'var(--accent)':'transparent'};color:${active==='users'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">👥 用户管理</button>
     <button class="admin-tab ${active==='settings'?'active':''}" onclick="navigate('admin-settings')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='settings'?'var(--accent)':'transparent'};color:${active==='settings'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">⚙️ 系统设置</button>
   </div>`;
@@ -1576,11 +1646,23 @@ async function renderAdminDashboard() {
         <h2 style="font-size:1rem;margin-bottom:12px">🗂 分类分布</h2>
         <div id="dash-cat"><div class="loading"><div class="spinner"></div></div></div>
       </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px">
+      <div>
+        <h2 style="font-size:1rem;margin-bottom:12px">📊 完播率 Top10</h2>
+        <div id="dash-top-completion"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+      <div>
+        <h2 style="font-size:1rem;margin-bottom:12px">⏱ 播放时长趋势</h2>
+        <div id="dash-play-trend" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px;min-height:120px"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
     </div>`;
   loadDashKpi();
   loadDashChart();
   loadDashTop();
   loadDashCat();
+  loadDashTopCompletion();
+  loadDashPlayTrend();
 }
 
 async function loadDashKpi() {
@@ -1649,6 +1731,44 @@ async function loadDashCat() {
       </div>
       <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden"><div style="background:var(--accent);height:100%;width:${(c.post_count/total)*100}%"></div></div>
     </div>`).join('');
+}
+
+async function loadDashTopCompletion() {
+  const data = await api('/api/admin/stats/top-completion')||{};
+  const items = data.items||[];
+  const el = $('dash-top-completion');
+  if(!items.length){el.innerHTML='<div class="empty"><p>暂无数据</p></div>';return;}
+  el.innerHTML = items.map((p,i)=>{
+    const rate = p.avg_completion !== undefined ? p.avg_completion : (p.completion_rate !== undefined ? p.completion_rate : 0);
+    const pct = (rate > 1 ? rate : rate * 100).toFixed(1);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">
+      <span style="font-weight:700;color:${i<3?'var(--accent)':'var(--text3)'};width:22px">${i+1}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
+        <div style="font-size:.7rem;color:var(--text3)">📊 ${pct}% · ▶️${p.play_count||0}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadDashPlayTrend() {
+  const el = $('dash-play-trend');
+  if (!el) return;
+  const data = await api('/api/admin/stats/play-time-trend')||{};
+  const series = data.series||data.items||[];
+  if(!series.length){el.innerHTML='<div class="empty"><p>暂无数据</p></div>';return;}
+  const max = Math.max(1, ...series.map(s=>(s.value||s.play_time||s.seconds||0)));
+  const w = 100, h = 120;
+  const points = series.map((s,i)=>`${(i/(series.length-1||1))*w},${h-((s.value||s.play_time||s.seconds||0)/max)*h}`).join(' ');
+  const total = series.reduce((a,s)=>a+(s.value||s.play_time||s.seconds||0),0);
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:140px;display:block">
+    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="0.8"/>
+  </svg>
+  <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text3);margin-top:6px">
+    <span>${series[0].date||''}</span>
+    <span>${series[series.length-1].date||''}</span>
+  </div>
+  <div style="font-size:.75rem;color:var(--text3);margin-top:8px;text-align:center">总播放时长 ${fdp(total)}</div>`;
 }
 
 // ─── Admin Users (PRD-005) ───
@@ -2401,6 +2521,220 @@ async function toggleAdminFeatured(postId, current) {
   }
 }
 
+// ─── PRD-020 Reports ───
+function showReportDialog(targetType, targetId) {
+  if (!state.user) { showLogin(); return; }
+  if (qs('.report-modal')) return;
+  const o = document.createElement('div'); o.className = 'auth-modal report-modal';
+  o.innerHTML = `<div class="auth-box">
+    <h2>🚩 举报</h2>
+    <p class="sub">请描述举报理由，管理员将尽快处理</p>
+    <div class="input-group"><label>举报理由</label>
+      <textarea id="report-reason" placeholder="请输入举报理由..." style="width:100%;min-height:100px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;color:var(--text);font-size:.85rem;resize:vertical;font-family:inherit"></textarea>
+    </div>
+    <div class="auth-actions">
+      <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
+      <button class="btn btn-primary" onclick="submitReport('${targetType}',${targetId})">提交举报</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => $('report-reason')?.focus(), 100);
+}
+
+async function submitReport(targetType, targetId) {
+  const reason = $('report-reason')?.value.trim();
+  if (!reason) { toast('请输入举报理由', 'error'); return; }
+  const btn = qs('.report-modal .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = '提交中...'; }
+  const r = await api('/api/reports', {
+    method: 'POST',
+    body: JSON.stringify({ target_type: targetType, target_id: targetId, reason })
+  });
+  if (r?.id || r?.ok) {
+    toast('✅ 举报已提交，管理员将尽快处理', 'success');
+    qs('.report-modal')?.remove();
+  } else {
+    if (btn) { btn.disabled = false; btn.textContent = '提交举报'; }
+    toast(r?.detail || '举报失败', 'error');
+  }
+}
+
+async function renderAdminReports() {
+  if (!state.user || state.user.role !== 'admin') { navigate('home'); toast('⛔ 无权限', 'error'); return; }
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header"><h1>🚩 举报队列</h1><div class="sub">处理用户举报内容</div></div>
+    ${adminTabs('reports')}
+    <div id="reports-list"><div class="loading"><div class="spinner"></div></div></div>`;
+  const data = await api('/api/admin/reports?status=pending') || {};
+  const items = data.items || data || [];
+  const list = $('reports-list');
+  if (!Array.isArray(items) || !items.length) {
+    list.innerHTML = '<div class="empty"><div class="icon">✅</div><p>暂无待处理举报</p></div>';
+    return;
+  }
+  list.innerHTML = items.map(r => {
+    const targetType = r.target_type === 'post' ? '📝 内容' : '💬 评论';
+    const summary = r.target_title || r.target_content || r.target_summary || `#${r.target_id}`;
+    const reporter = r.reporter?.username || r.reporter_name || '匿名';
+    return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 16px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+            <span style="font-size:.75rem;background:var(--bg3);padding:2px 8px;border-radius:4px">${targetType}</span>
+            <span style="font-size:.8rem;color:var(--text3)">👤 ${esc(reporter)}</span>
+            <span style="font-size:.75rem;color:var(--text3)">${dt(r.created_at)}</span>
+          </div>
+          <div style="font-size:.85rem;font-weight:600;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(summary)}</div>
+          <div style="font-size:.8rem;color:var(--text2);background:var(--bg3);padding:8px 10px;border-radius:6px;margin-top:6px">${esc(r.reason || '未提供理由')}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn btn-secondary" style="color:#f87171" onclick="handleReport(${r.id},'delete_content')">🗑 删除内容</button>
+        <button class="btn btn-secondary" style="color:#f59e0b" onclick="handleReport(${r.id},'ban_user')">🚫 封禁用户</button>
+        <button class="btn btn-ghost" onclick="handleReport(${r.id},'none')">✕ 驳回</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function handleReport(reportId, action) {
+  const status = action === 'none' ? 'dismissed' : 'resolved';
+  const actionText = action === 'delete_content' ? '删除内容' : action === 'ban_user' ? '封禁用户' : '驳回';
+  if (!confirm(`确定执行「${actionText}」操作吗？`)) return;
+  const r = await api(`/api/admin/reports/${reportId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ status, action })
+  });
+  if (r?.ok) {
+    toast(`✅ 已${actionText}`, 'success');
+    renderAdminReports();
+  } else {
+    toast(r?.detail || '操作失败', 'error');
+  }
+}
+
+// ─── PRD-018 Transcode ───
+let _transcodePollTimer = null;
+
+async function retryTranscode(postId) {
+  if (!confirm('确定重试转码吗？')) return;
+  const r = await api(`/api/admin/transcode/${postId}/retry`, { method: 'POST' });
+  if (r?.ok) {
+    toast('✅ 已提交重试', 'success');
+    if (state.view === 'post') renderPost();
+    else if (state.view === 'admin-transcode') renderAdminTranscode();
+  } else {
+    toast(r?.detail || '重试失败', 'error');
+  }
+}
+
+async function renderAdminTranscode() {
+  if (!state.user || state.user.role !== 'admin') { navigate('home'); toast('⛔ 无权限', 'error'); return; }
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header"><h1>🎬 转码队列</h1><div class="sub">监控转码任务状态</div></div>
+    ${adminTabs('transcode')}
+    <div id="transcode-status"><div class="loading"><div class="spinner"></div></div></div>
+    <h2 style="font-size:1rem;margin:20px 0 12px">📋 任务列表</h2>
+    <div id="transcode-list"><div class="loading"><div class="spinner"></div></div></div>`;
+  loadTranscodeStatus();
+  loadTranscodeList();
+  if (_transcodePollTimer) clearInterval(_transcodePollTimer);
+  _transcodePollTimer = setInterval(() => {
+    if (state.view !== 'admin-transcode') { clearInterval(_transcodePollTimer); _transcodePollTimer = null; return; }
+    loadTranscodeStatus();
+    loadTranscodeList();
+  }, 10000);
+}
+
+async function loadTranscodeStatus() {
+  const el = $('transcode-status');
+  if (!el) return;
+  const data = await api('/api/admin/transcode/status') || {};
+  const processing = data.processing || 0;
+  const failed = data.failed || 0;
+  const done = data.done || data.ready || 0;
+  el.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700;color:#f59e0b">${processing}</div><div style="font-size:.75rem;color:var(--text3)">⏳ 处理中</div></div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700;color:#ef4444">${failed}</div><div style="font-size:.75rem;color:var(--text3)">❌ 失败</div></div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700;color:#10b981">${done}</div><div style="font-size:.75rem;color:var(--text3)">✅ 已完成</div></div>
+  </div>`;
+}
+
+async function loadTranscodeList() {
+  const el = $('transcode-list');
+  if (!el) return;
+  const data = await api('/api/admin/transcode/list') || {};
+  const items = data.items || data || [];
+  if (!Array.isArray(items) || !items.length) {
+    el.innerHTML = '<div class="empty"><div class="icon">🎬</div><p>暂无转码任务</p></div>';
+    return;
+  }
+  el.innerHTML = items.map(p => {
+    const status = p.status || p.transcode_status || 'unknown';
+    const statusText = status === 'processing' ? '⏳ 处理中' : status === 'failed' ? '❌ 失败' : status === 'ready' || status === 'done' ? '✅ 已完成' : status;
+    const statusColor = status === 'processing' ? '#f59e0b' : status === 'failed' ? '#ef4444' : '#10b981';
+    return `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:8px">
+      <div style="font-size:1.5rem;opacity:.5;flex-shrink:0">${p.file_type === 'video' ? '🎬' : '🎵'}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
+        <div style="font-size:.75rem;color:var(--text3);margin-top:2px">
+          ${p.duration > 0 ? dur(p.duration) + ' · ' : ''}${fs(p.file_size)} · 👁${p.views || 0}
+        </div>
+      </div>
+      <span style="font-size:.8rem;color:${statusColor};font-weight:600;flex-shrink:0">${statusText}</span>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        ${status === 'failed' ? `<button class="btn btn-ghost" onclick="retryTranscode(${p.id})">🔄 重试</button>` : ''}
+        <button class="btn btn-ghost" onclick="navigate('post',${p.id})">👁 查看</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─── PRD-021 Play Session ───
+async function startPlaySession(postId) {
+  if (!state.user) return null;
+  const r = await api(`/api/posts/${postId}/play-session`, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'start' })
+  });
+  if (r?.session_id) {
+    state.currentSessionId = r.session_id;
+    return r.session_id;
+  }
+  return null;
+}
+
+async function updatePlaySession(postId, playedSeconds) {
+  if (!state.user || !state.currentSessionId) return;
+  await api(`/api/posts/${postId}/play-session`, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'update', session_id: state.currentSessionId, played_seconds: playedSeconds })
+  });
+}
+
+async function endPlaySession(postId, playedSeconds, duration) {
+  if (!state.user || !state.currentSessionId) return;
+  await api(`/api/posts/${postId}/play-session`, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'end', session_id: state.currentSessionId, played_seconds: playedSeconds, duration })
+  });
+  state.currentSessionId = null;
+}
+
+window.addEventListener('beforeunload', () => {
+  if (state.currentSessionId && state.postId) {
+    const m = document.querySelector('audio, video');
+    if (m) {
+      const ct = Math.floor(m.currentTime || 0);
+      const d = Math.floor(m.duration || 0);
+      navigator.sendBeacon && navigator.sendBeacon(`${API}/api/posts/${state.postId}/play-session`,
+        new Blob([JSON.stringify({ action: 'end', session_id: state.currentSessionId, played_seconds: ct, duration: d })], { type: 'application/json' }));
+    }
+  }
+});
+
 // ─── PRD-012 Comments ───
 let _commentPage = 1;
 
@@ -2422,6 +2756,7 @@ function renderCommentList(data, postId) {
   }
   let html = items.map(c => {
     const canDelete = state.user && (state.user.role === 'admin' || (c.user && c.user.id === state.user.id));
+    const canReport = !!state.user;
     return `<div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
       <div style="width:36px;height:36px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">👤</div>
       <div style="flex:1;min-width:0">
@@ -2433,8 +2768,9 @@ function renderCommentList(data, postId) {
           <span style="font-size:.75rem;color:var(--text3)">${dt(c.created_at)}</span>
         </div>
         <div style="margin-top:6px;font-size:.9rem;line-height:1.5;word-wrap:break-word">${esc(c.content)}</div>
-        ${canDelete ? `<div style="margin-top:6px">
-          <button class="btn btn-ghost btn-icon" style="color:#f87171;font-size:.8rem;padding:2px 8px" onclick="deleteComment(${c.id},${postId})">🗑 删除</button>
+        ${(canDelete||canReport) ? `<div style="margin-top:6px;display:flex;gap:6px">
+          ${canReport?`<button class="btn btn-ghost btn-icon" style="font-size:.8rem;padding:2px 8px" onclick="showReportDialog('comment',${c.id})">🚩 举报</button>`:''}
+          ${canDelete?`<button class="btn btn-ghost btn-icon" style="color:#f87171;font-size:.8rem;padding:2px 8px" onclick="deleteComment(${c.id},${postId})">🗑 删除</button>`:''}
         </div>` : ''}
       </div>
     </div>`;

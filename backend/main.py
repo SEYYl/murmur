@@ -1,4 +1,5 @@
-import os, uuid, shutil, subprocess, json, time, mimetypes, zipfile, io
+import os, uuid, shutil, subprocess, json, time, mimetypes, zipfile, io, hashlib, threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -9,7 +10,11 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Res
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, func
 
-from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, SystemSetting, DEFAULT_SETTINGS, Tag, PostTag, Playlist, PlaylistItem, Comment, Subtitle, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
+from backend.models import (
+    init_db, get_db, engine, Category, Post, User, UserFavorite, PlayHistory,
+    SystemSetting, DEFAULT_SETTINGS, Tag, PostTag, Playlist, PlaylistItem,
+    Comment, Subtitle, Report, PlaySession, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS,
+)
 from backend.auth import hash_password, verify_password, create_access_token, get_current_user, require_creator, require_admin, get_token
 
 # ─── View count anti-spam ───
@@ -41,6 +46,12 @@ def fmt_post(p, user=None, db=None):
     author = None
     if p.user:
         author = {"id": p.user.id, "username": p.user.username}
+    # PRD-021: avg completion ratio across play sessions
+    avg_completion_ratio = 0
+    if db:
+        avg_completion_ratio = float(
+            db.query(func.avg(PlaySession.completion_ratio)).filter(PlaySession.post_id == p.id).scalar() or 0
+        )
     return {
         "id": p.id, "title": p.title,
         "description": p.description if hasattr(p, 'description') else "",
@@ -50,6 +61,9 @@ def fmt_post(p, user=None, db=None):
         "comment_count": comment_count,
         "subtitle_count": subtitle_count,
         "featured": bool(p.featured),
+        "status": getattr(p, "status", "ready") or "ready",
+        "total_play_time": float(getattr(p, "total_play_time", 0) or 0),
+        "avg_completion_ratio": avg_completion_ratio,
         "created_at": p.created_at.isoformat(),
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
         "category": {"id": p.category.id, "name": p.category.name, "icon": p.category.icon} if p.category else None,
@@ -71,6 +85,101 @@ def optional_user(request: Request, db: Session = Depends(get_db)):
         return u
     except (JWTError, ValueError, TypeError):
         return None
+
+
+# ─── PRD-018: Async Transcode Queue ───
+_transcode_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="transcode")
+# Track in-flight transcode start times for timeout monitoring
+_transcode_starts: dict = {}
+_transcode_lock = threading.Lock()
+_TRANSCODE_TIMEOUT_SECONDS = 1800  # 30 minutes
+
+
+def _update_post_status(post_id: int, status: str, file_size: Optional[int] = None):
+    """Update a post's status (and optionally file_size) in a fresh session."""
+    db_session = Session(bind=engine)
+    try:
+        p = db_session.query(Post).filter(Post.id == post_id).first()
+        if p:
+            p.status = status
+            if file_size is not None:
+                p.file_size = file_size
+            db_session.commit()
+    finally:
+        db_session.close()
+
+
+def transcode_task(post_id: int, file_path: str, file_type: str):
+    """Background transcode task with 3 retries and 30-min overall timeout.
+
+    Runs `compress_media` on the saved file, then marks the post as ready.
+    On repeated failure or timeout, marks the post as failed.
+    """
+    deadline = time.time() + _TRANSCODE_TIMEOUT_SECONDS
+    with _transcode_lock:
+        _transcode_starts[post_id] = time.time()
+    last_err = None
+    try:
+        for attempt in range(3):
+            # Check overall timeout before each attempt
+            if time.time() > deadline:
+                _update_post_status(post_id, "failed")
+                return
+            try:
+                compress_media(file_path, file_type)
+                # Success: refresh file info and mark ready
+                info = get_media_info(file_path)
+                _update_post_status(post_id, "ready", file_size=info.get("size"))
+                return
+            except Exception as e:
+                last_err = e
+                continue  # retry
+        # All 3 attempts failed
+        _update_post_status(post_id, "failed")
+    finally:
+        with _transcode_lock:
+            _transcode_starts.pop(post_id, None)
+
+
+def _submit_transcode(post_id: int, file_path: str, file_type: str):
+    """Submit a transcode job to the background executor."""
+    _transcode_executor.submit(transcode_task, post_id, file_path, file_type)
+
+
+def _check_transcode_timeouts():
+    """Mark any transcode job exceeding the timeout as failed.
+
+    Called opportunistically from the admin status endpoint; this is a safety
+    net since `compress_media` already enforces a per-call subprocess timeout.
+    """
+    now = time.time()
+    stale_ids = []
+    with _transcode_lock:
+        for pid, started in list(_transcode_starts.items()):
+            if now - started > _TRANSCODE_TIMEOUT_SECONDS:
+                stale_ids.append(pid)
+    for pid in stale_ids:
+        _update_post_status(pid, "failed")
+
+
+# ─── PRD-020: Sensitive word filter ───
+def _get_sensitive_words(db: Session = None) -> list:
+    raw = get_setting("sensitive_words", "", db=db) or ""
+    return [w.strip() for w in raw.split(",") if w.strip()]
+
+
+def _contains_sensitive_word(text: str, words: list) -> Optional[str]:
+    if not text or not words:
+        return None
+    lower = text.lower()
+    for w in words:
+        if w and w.lower() in lower:
+            return w
+    return None
+
+
+def _compute_content_hash(file_bytes: bytes) -> str:
+    return hashlib.md5(file_bytes).hexdigest()
 
 
 # ─── System Settings Cache (PRD-007) ───
@@ -417,8 +526,26 @@ def list_posts(
     if search:
         like = f"%{search}%"
         q = q.filter(or_(Post.title.ilike(like), Post.description.ilike(like)))
+    # PRD-018: hide non-ready posts unless viewer is owner or admin
+    if user is None:
+        q = q.filter(Post.status == "ready")
+    elif user.role == "admin":
+        pass  # admin sees everything
+    else:
+        # logged-in non-admin: see ready posts OR their own posts
+        q = q.filter(or_(Post.status == "ready", Post.user_id == user.id))
+
     if sort == "popular":
-        q = q.order_by(desc(Post.views))
+        # PRD-021: weighted score = views*0.4 + favorites*0.3 + completion_ratio*0.3
+        # Compute via SQL subqueries so ordering is correct before pagination.
+        fav_sub = db.query(func.count(UserFavorite.id)).filter(
+            UserFavorite.post_id == Post.id
+        ).scalar_subquery()
+        comp_sub = db.query(func.avg(PlaySession.completion_ratio)).filter(
+            PlaySession.post_id == Post.id
+        ).scalar_subquery()
+        score = (Post.views * 0.4 + func.coalesce(fav_sub, 0) * 0.3 + func.coalesce(comp_sub, 0) * 0.3)
+        q = q.order_by(desc(score))
     else:
         q = q.order_by(desc(Post.created_at))
     total = q.count()
@@ -430,7 +557,7 @@ def list_posts(
 @app.get("/api/posts/featured")
 def featured_posts(limit: int = Query(10, ge=1, le=50),
                    db: Session = Depends(get_db), user: User = Depends(optional_user)):
-    posts = db.query(Post).filter(Post.featured == True).order_by(
+    posts = db.query(Post).filter(Post.featured == True, Post.status == "ready").order_by(
         desc(Post.created_at)
     ).limit(limit).all()
     return {"items": [fmt_post(p, user, db) for p in posts]}
@@ -441,6 +568,10 @@ def get_post(post_id: int, request: Request, db: Session = Depends(get_db), user
     p = db.query(Post).filter(Post.id == post_id).first()
     if not p:
         raise HTTPException(404)
+    # PRD-018: processing/failed posts only visible to owner/admin
+    if getattr(p, "status", "ready") != "ready":
+        if user is None or (user.role != "admin" and p.user_id != user.id):
+            raise HTTPException(404)
     if should_count_view(post_id, request.client.host):
         p.views += 1
         db.commit()
@@ -461,6 +592,15 @@ async def create_post(
     file: UploadFile = File(...), cover: UploadFile = File(None),
     user: User = Depends(require_creator), db: Session = Depends(get_db)
 ):
+    title = title.strip()
+    description = (description or "").strip()
+
+    # PRD-020: sensitive word filter
+    sensitive_words = _get_sensitive_words(db=db)
+    bad = _contains_sensitive_word(title, sensitive_words) or _contains_sensitive_word(description, sensitive_words)
+    if bad:
+        raise HTTPException(400, f"内容包含敏感词：{bad}")
+
     ext = os.path.splitext(file.filename or "")[1].lower()
     file_type = next((ft for ft, exts in ALLOWED_EXTS.items() if ext in exts), None)
     if not file_type or file_type == "image":
@@ -476,6 +616,12 @@ async def create_post(
     if max_size_mb > 0 and len(content) > max_size_mb * 1024 * 1024:
         raise HTTPException(413, f"文件过大，最大允许 {max_size_mb}MB")
 
+    # PRD-020: compute content hash and check for duplicates
+    content_hash = _compute_content_hash(content)
+    existing = db.query(Post).filter(Post.content_hash == content_hash).first()
+    if existing:
+        raise HTTPException(409, "内容已存在（文件哈希重复）")
+
     with open(save_path, "wb") as f:
         f.write(content)
 
@@ -484,11 +630,8 @@ async def create_post(
     final_path = os.path.join(MEDIA_DIR, subdir, fname)
     shutil.move(save_path, final_path)
 
-    # ─── Compress large media files ───
-    compress_media(final_path, file_type)
-    # Re-check file info after compression
-    info = get_media_info(final_path)
-
+    # PRD-018: cover/thumbnail generation runs on the original (uncompressed)
+    # file before the async transcode task compresses it in-place.
     cover_url = ""
     if cover and cover.filename:
         ce = os.path.splitext(cover.filename)[1].lower()
@@ -508,17 +651,23 @@ async def create_post(
 
     url = f"media/{subdir}/{fname}"
 
-    post = Post(title=title.strip(), description=description.strip(),
+    # PRD-018: create post with status=processing; transcode runs in background
+    post = Post(title=title, description=description,
                 file_path=url, file_type=file_type, file_size=info["size"],
                 duration=info["duration"], cover_image=cover_url,
-                category_id=category_id, user_id=user.id)
+                category_id=category_id, user_id=user.id,
+                status="processing", content_hash=content_hash)
     db.add(post)
     db.flush()
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     _set_post_tags(db, post.id, tag_list)
     db.commit()
     db.refresh(post)
-    return {"id": post.id, "title": post.title, "file_type": post.file_type}
+
+    # Submit background transcode (compress_media + status update)
+    _submit_transcode(post.id, final_path, file_type)
+
+    return {"id": post.id, "title": post.title, "file_type": post.file_type, "status": post.status}
 
 
 @app.delete("/api/posts/{post_id}")
@@ -607,8 +756,63 @@ def play_heartbeat(
     else:
         rec = PlayHistory(user_id=user.id, post_id=post_id, position=position, duration=duration)
         db.add(rec)
+
+    # PRD-021: track play session for completion ratio / play time
+    session_id = data.get("session_id")
+    if session_id:
+        ps = db.query(PlaySession).filter(PlaySession.id == session_id).first()
+        if ps and ps.post_id == post_id:
+            ps.played_seconds = float(data.get("played_seconds", ps.played_seconds))
     db.commit()
     return {"ok": True}
+
+
+@app.post("/api/posts/{post_id}/play-session")
+def report_play_session(
+    post_id: int, data: dict,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """PRD-021: receive play session report (start/end/update)."""
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    action = (data.get("action") or "start").lower()
+    session_id = data.get("session_id")
+
+    if action == "start":
+        ps = PlaySession(
+            user_id=user.id, post_id=post_id,
+            played_seconds=float(data.get("played_seconds", 0)),
+        )
+        db.add(ps)
+        db.commit()
+        db.refresh(ps)
+        return {"ok": True, "session_id": ps.id}
+
+    if session_id is None:
+        raise HTTPException(400, "session_id is required for update/end actions")
+    ps = db.query(PlaySession).filter(PlaySession.id == session_id).first()
+    if not ps or ps.post_id != post_id:
+        raise HTTPException(404, "播放会话不存在")
+
+    played_seconds = float(data.get("played_seconds", ps.played_seconds))
+    ps.played_seconds = played_seconds
+
+    if action in ("end", "ended", "pause", "leave"):
+        ps.ended_at = datetime.now(timezone.utc)
+        duration = float(data.get("duration", 0)) or (p.duration or 0)
+        if duration > 0:
+            ps.completion_ratio = max(0.0, min(1.0, played_seconds / duration))
+        # Accumulate play time onto the post
+        p.total_play_time = float(p.total_play_time or 0) + played_seconds
+
+    db.commit()
+    return {
+        "ok": True,
+        "session_id": ps.id,
+        "played_seconds": ps.played_seconds,
+        "completion_ratio": ps.completion_ratio,
+    }
 
 
 @app.get("/api/me/history")
@@ -740,9 +944,12 @@ def get_admin_settings(admin: User = Depends(require_admin), db: Session = Depen
 @app.put("/api/admin/settings")
 def update_admin_settings(data: dict, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     allowed = set(DEFAULT_SETTINGS.keys())
+    storage_keys_touched = False
     for k, v in data.items():
         if k not in allowed:
             continue
+        if k.startswith(("storage_backend", "s3_")):
+            storage_keys_touched = True
         row = db.query(SystemSetting).filter(SystemSetting.key == k).first()
         if row:
             row.value = str(v)
@@ -751,6 +958,13 @@ def update_admin_settings(data: dict, admin: User = Depends(require_admin), db: 
             db.add(SystemSetting(key=k, value=str(v), updated_by=admin.id))
     db.commit()
     invalidate_settings_cache()
+    # PRD-019: reset cached storage backend so the new config takes effect
+    if storage_keys_touched:
+        try:
+            from backend.storage import reset_storage_cache
+            reset_storage_cache()
+        except ImportError:
+            pass
     return {"ok": True}
 
 
@@ -869,9 +1083,10 @@ def get_admin_stats(range: str = Query("7d"), admin: User = Depends(require_admi
         PlayHistory.played_at >= today_start
     ).distinct().count()
 
-    # 总播放次数 & 总播放时长（粗估，从 PlayHistory 累计）
-    total_views = db.query(Post).count()  # 占位：实际需 PlaySession 表（PRD-021）
-    total_play_time = db.query(PlayHistory).count()  # 占位：心跳条数作为代理指标
+    # PRD-021: real play metrics from PlaySession / Post.total_play_time
+    total_views = db.query(func.coalesce(func.sum(Post.views), 0)).scalar() or 0
+    total_play_time = db.query(func.coalesce(func.sum(Post.total_play_time), 0)).scalar() or 0
+    total_play_sessions = db.query(PlaySession).count()
 
     # 总用户数 & 总内容数（不限时间范围）
     total_users = db.query(User).count()
@@ -882,8 +1097,9 @@ def get_admin_stats(range: str = Query("7d"), admin: User = Depends(require_admi
         "dau": dau,
         "new_users": new_users,
         "new_posts": new_posts,
-        "total_views": total_views,
-        "total_play_time": total_play_time,
+        "total_views": int(total_views),
+        "total_play_time": float(total_play_time),
+        "total_play_sessions": total_play_sessions,
         "total_users": total_users,
         "total_posts": total_posts,
     }
@@ -931,23 +1147,35 @@ def get_stats_top_posts(
     limit: int = Query(10, ge=1, le=50), metric: str = Query("views"),
     admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
+    from sqlalchemy import func as _f
     q = db.query(Post)
     if metric == "favorites":
-        from sqlalchemy import func as _f
         q = q.outerjoin(UserFavorite).group_by(Post.id).order_by(
             _f.count(UserFavorite.id).desc(), Post.views.desc()
         )
     elif metric == "play_time":
-        q = q.order_by(Post.views.desc())  # 占位，PRD-021 后再细化
+        # PRD-021: order by accumulated play time
+        q = q.order_by(desc(Post.total_play_time), desc(Post.views))
+    elif metric == "completion":
+        # PRD-021: order by average completion ratio
+        avg_comp = db.query(_f.avg(PlaySession.completion_ratio)).filter(
+            PlaySession.post_id == Post.id
+        ).scalar_subquery()
+        q = q.order_by(desc(_f.coalesce(avg_comp, 0)), desc(Post.views))
     else:
         q = q.order_by(Post.views.desc())
     posts = q.limit(limit).all()
     items = []
     for p in posts:
         fav_count = db.query(UserFavorite).filter(UserFavorite.post_id == p.id).count()
+        avg_comp = db.query(_f.avg(PlaySession.completion_ratio)).filter(
+            PlaySession.post_id == p.id
+        ).scalar() or 0
         items.append({
             "id": p.id, "title": p.title, "views": p.views,
             "favorite_count": fav_count,
+            "total_play_time": float(p.total_play_time or 0),
+            "avg_completion_ratio": float(avg_comp),
             "category": {"name": p.category.name, "icon": p.category.icon} if p.category else None,
         })
     return {"metric": metric, "items": items}
@@ -1020,6 +1248,13 @@ def tag_posts(tag_id: int, page: int = Query(1, ge=1), sort: str = Query("latest
     if not t:
         raise HTTPException(404, "标签不存在")
     q = db.query(Post).join(PostTag).filter(PostTag.tag_id == tag_id)
+    # PRD-018: hide non-ready posts unless owner/admin
+    if user is None:
+        q = q.filter(Post.status == "ready")
+    elif user.role == "admin":
+        pass
+    else:
+        q = q.filter(or_(Post.status == "ready", Post.user_id == user.id))
     total = q.count()
     if sort == "popular":
         q = q.order_by(desc(Post.views))
@@ -1177,7 +1412,7 @@ def related_posts(post_id: int, limit: int = Query(6, ge=1, le=20),
         raise HTTPException(404, "内容不存在")
     # 基于同分类 + 共现标签的简单推荐
     tag_ids = [pt.tag_id for pt in db.query(PostTag).filter(PostTag.post_id == post_id).all()]
-    q = db.query(Post).filter(Post.id != post_id)
+    q = db.query(Post).filter(Post.id != post_id, Post.status == "ready")
     if post.category_id:
         q = q.filter(Post.category_id == post.category_id)
     # 优先选标签共现多的
@@ -1193,7 +1428,7 @@ def related_posts(post_id: int, limit: int = Query(6, ge=1, le=20),
         have_ids = {p.id for p in posts}
         fill = db.query(Post).filter(
             Post.category_id == post.category_id, Post.id != post_id,
-            Post.id.notin_(have_ids)
+            Post.id.notin_(have_ids), Post.status == "ready"
         ).order_by(desc(Post.views)).limit(limit - len(posts)).all()
         posts.extend(fill)
     return {"items": [fmt_post(p, user, db) for p in posts[:limit]]}
@@ -1503,6 +1738,251 @@ def rss_feed(request: Request, category_id: int = Query(None), db: Session = Dep
     _rss_cache["category_id"] = category_id
     _rss_cache["at"] = now
     return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
+
+
+# ─── PRD-018: Admin Transcode Monitoring ───
+@app.get("/api/admin/transcode/status")
+def transcode_status(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Return counts of processing/failed posts for transcode monitoring."""
+    _check_transcode_timeouts()
+    processing = db.query(Post).filter(Post.status == "processing").count()
+    failed = db.query(Post).filter(Post.status == "failed").count()
+    ready = db.query(Post).filter(Post.status == "ready").count()
+    in_flight = 0
+    with _transcode_lock:
+        in_flight = len(_transcode_starts)
+    return {
+        "processing": processing,
+        "failed": failed,
+        "ready": ready,
+        "in_flight": in_flight,
+    }
+
+
+@app.get("/api/admin/transcode/list")
+def transcode_list(
+    status: str = Query(None),
+    page: int = Query(1, ge=1),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """List posts that are processing or failed (optionally filtered)."""
+    q = db.query(Post)
+    if status in ("processing", "failed", "ready"):
+        q = q.filter(Post.status == status)
+    else:
+        q = q.filter(Post.status.in_(("processing", "failed")))
+    total = q.count()
+    posts = q.order_by(desc(Post.created_at)).offset((page - 1) * 20).limit(20).all()
+    return {
+        "items": [fmt_post(p, user=admin, db=db) for p in posts],
+        "total": total, "page": page,
+        "total_pages": max(1, (total + 19) // 20),
+    }
+
+
+@app.post("/api/admin/transcode/{post_id}/retry")
+def transcode_retry(post_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Re-trigger transcode for a failed/processing post."""
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    if p.status == "ready":
+        raise HTTPException(400, "该内容已转码完成，无需重试")
+    # Resolve the absolute file path on disk
+    rel = p.file_path
+    if rel.startswith("media/"):
+        rel = rel[len("media/"):]
+    abs_path = os.path.join(MEDIA_DIR, rel)
+    if not os.path.exists(abs_path):
+        raise HTTPException(404, "源文件不存在，无法重试转码")
+    p.status = "processing"
+    db.commit()
+    _submit_transcode(p.id, abs_path, p.file_type)
+    return {"ok": True, "status": "processing"}
+
+
+# ─── PRD-020: Content Reports ───
+@app.post("/api/reports")
+def create_report(data: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Submit a report for a post or comment."""
+    target_type = (data.get("target_type") or "").strip().lower()
+    target_id = data.get("target_id")
+    reason = (data.get("reason") or "").strip()
+    if target_type not in ("post", "comment"):
+        raise HTTPException(400, "target_type 必须为 post 或 comment")
+    if not isinstance(target_id, int) or target_id <= 0:
+        raise HTTPException(400, "target_id 无效")
+    # Verify target exists
+    if target_type == "post":
+        if not db.query(Post).filter(Post.id == target_id).first():
+            raise HTTPException(404, "被举报的内容不存在")
+    else:
+        if not db.query(Comment).filter(Comment.id == target_id).first():
+            raise HTTPException(404, "被举报的评论不存在")
+    if len(reason) > 1000:
+        raise HTTPException(400, "举报理由不能超过 1000 字")
+    rpt = Report(
+        reporter_id=user.id, target_type=target_type, target_id=target_id,
+        reason=reason, status="pending",
+    )
+    db.add(rpt)
+    db.commit()
+    db.refresh(rpt)
+    return {
+        "id": rpt.id, "target_type": rpt.target_type, "target_id": rpt.target_id,
+        "reason": rpt.reason, "status": rpt.status,
+        "created_at": rpt.created_at.isoformat(),
+    }
+
+
+@app.get("/api/admin/reports")
+def list_reports(
+    status: str = Query("pending"), page: int = Query(1, ge=1),
+    target_type: str = Query(None),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Admin: list reports filtered by status."""
+    q = db.query(Report)
+    if status in ("pending", "resolved", "dismissed"):
+        q = q.filter(Report.status == status)
+    if target_type in ("post", "comment"):
+        q = q.filter(Report.target_type == target_type)
+    total = q.count()
+    reports = q.order_by(desc(Report.created_at)).offset((page - 1) * 20).limit(20).all()
+    items = []
+    for r in reports:
+        item = {
+            "id": r.id, "target_type": r.target_type, "target_id": r.target_id,
+            "reason": r.reason, "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
+            "resolved_by": r.resolved_by,
+            "reporter": {"id": r.reporter.id, "username": r.reporter.username} if r.reporter else None,
+        }
+        # Attach target snapshot
+        if r.target_type == "post":
+            tp = db.query(Post).filter(Post.id == r.target_id).first()
+            item["target"] = {"id": tp.id, "title": tp.title, "status": tp.status} if tp else None
+        else:
+            tc = db.query(Comment).filter(Comment.id == r.target_id).first()
+            item["target"] = {"id": tc.id, "content": (tc.content or "")[:200]} if tc else None
+        items.append(item)
+    return {"items": items, "total": total, "page": page,
+            "total_pages": max(1, (total + 19) // 20)}
+
+
+@app.put("/api/admin/reports/{report_id}")
+def resolve_report(
+    report_id: int, data: dict,
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Admin: resolve or dismiss a report. Optionally delete the target content
+    or ban the reported user."""
+    rpt = db.query(Report).filter(Report.id == report_id).first()
+    if not rpt:
+        raise HTTPException(404, "举报记录不存在")
+    new_status = (data.get("status") or "").strip().lower()
+    if new_status not in ("resolved", "dismissed"):
+        raise HTTPException(400, "status 必须为 resolved 或 dismissed")
+    action = (data.get("action") or "").strip().lower()  # delete_content / ban_user / none
+
+    if action == "delete_content":
+        if rpt.target_type == "post":
+            tp = db.query(Post).filter(Post.id == rpt.target_id).first()
+            if tp:
+                abs_path = os.path.join(MEDIA_DIR, *tp.file_path.split("/")[1:]) if tp.file_path else ""
+                if abs_path and os.path.exists(abs_path):
+                    try:
+                        os.remove(abs_path)
+                    except OSError:
+                        pass
+                if tp.cover_image:
+                    cp = os.path.join(MEDIA_DIR, "covers", os.path.basename(tp.cover_image))
+                    if os.path.exists(cp):
+                        try:
+                            os.remove(cp)
+                        except OSError:
+                            pass
+                db.delete(tp)
+        elif rpt.target_type == "comment":
+            tc = db.query(Comment).filter(Comment.id == rpt.target_id).first()
+            if tc:
+                db.delete(tc)
+    elif action == "ban_user":
+        # Ban the owner of the reported content
+        if rpt.target_type == "post":
+            tp = db.query(Post).filter(Post.id == rpt.target_id).first()
+            if tp and tp.user_id:
+                u = db.query(User).filter(User.id == tp.user_id).first()
+                if u and u.role != "admin":
+                    u.status = "banned"
+        elif rpt.target_type == "comment":
+            tc = db.query(Comment).filter(Comment.id == rpt.target_id).first()
+            if tc:
+                u = db.query(User).filter(User.id == tc.user_id).first()
+                if u and u.role != "admin":
+                    u.status = "banned"
+
+    rpt.status = new_status
+    rpt.resolved_at = datetime.now(timezone.utc)
+    rpt.resolved_by = admin.id
+    db.commit()
+    return {"ok": True, "status": rpt.status, "action": action or "none"}
+
+
+# ─── PRD-021: Completion & Play Time Analytics ───
+@app.get("/api/admin/stats/top-completion")
+def stats_top_completion(
+    limit: int = Query(10, ge=1, le=50),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Top N posts by average completion ratio."""
+    from sqlalchemy import func as _f
+    rows = db.query(
+        PlaySession.post_id,
+        _f.avg(PlaySession.completion_ratio).label("avg_comp"),
+        _f.count(PlaySession.id).label("session_count"),
+    ).group_by(PlaySession.post_id).order_by(desc("avg_comp")).limit(limit).all()
+    items = []
+    for post_id, avg_comp, session_count in rows:
+        p = db.query(Post).filter(Post.id == post_id).first()
+        if not p:
+            continue
+        items.append({
+            "id": p.id, "title": p.title, "views": p.views,
+            "total_play_time": float(p.total_play_time or 0),
+            "avg_completion_ratio": float(avg_comp or 0),
+            "session_count": int(session_count or 0),
+            "category": {"name": p.category.name, "icon": p.category.icon} if p.category else None,
+        })
+    return {"metric": "completion", "items": items}
+
+
+@app.get("/api/admin/stats/play-time-trend")
+def stats_play_time_trend(
+    days: int = Query(30, ge=1, le=365),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Daily total play time trend based on PlaySession.started_at."""
+    from datetime import timedelta
+    from sqlalchemy import func as _f
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=days - 1)
+    rows = db.query(
+        PlaySession.started_at, _f.sum(PlaySession.played_seconds)
+    ).filter(PlaySession.started_at >= _days_ago(days)).group_by(
+        _f.date(PlaySession.started_at)
+    ).all()
+    buckets = {}
+    for ts, total in rows:
+        d = ts.date() if hasattr(ts, "date") else ts
+        buckets[d] = float(total or 0)
+    series = []
+    cur = start
+    while cur <= end:
+        series.append({"date": cur.isoformat(), "value": buckets.get(cur, 0.0)})
+        cur += timedelta(days=1)
+    return {"metric": "play_time", "series": series}
 
 
 # ─── Frontend SPA ───

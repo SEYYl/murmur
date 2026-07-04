@@ -56,10 +56,17 @@ class Post(Base):
     featured = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    # PRD-018: async transcode status (processing / ready / failed)
+    status = Column(String(20), default="ready")
+    # PRD-020: content hash for duplicate detection
+    content_hash = Column(String(64), nullable=True, index=True)
+    # PRD-021: total accumulated play time in seconds
+    total_play_time = Column(Float, default=0)
     category = relationship("Category", back_populates="posts")
     user = relationship("User", back_populates="posts")
     favorites = relationship("UserFavorite", back_populates="post", cascade="all, delete-orphan")
     tags = relationship("PostTag", back_populates="post", cascade="all, delete-orphan")
+    play_sessions = relationship("PlaySession", back_populates="post", cascade="all, delete-orphan")
 
 
 class UserFavorite(Base):
@@ -161,6 +168,34 @@ class Subtitle(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class Report(Base):
+    """PRD-020: content moderation reports."""
+    __tablename__ = "reports"
+    id = Column(Integer, primary_key=True, index=True)
+    reporter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    target_type = Column(String(20), nullable=False)  # post / comment
+    target_id = Column(Integer, nullable=False)
+    reason = Column(Text, default="")
+    status = Column(String(20), default="pending")  # pending / resolved / dismissed
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(Integer, nullable=True)
+    reporter = relationship("User")
+
+
+class PlaySession(Base):
+    """PRD-021: play session tracking for completion rate."""
+    __tablename__ = "play_sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    ended_at = Column(DateTime, nullable=True)
+    played_seconds = Column(Float, default=0)
+    completion_ratio = Column(Float, default=0)
+    post = relationship("Post", back_populates="play_sessions")
+
+
 DEFAULT_SETTINGS = {
     "registration_enabled": "true",
     "max_upload_size_mb": "500",
@@ -171,6 +206,14 @@ DEFAULT_SETTINGS = {
     "footer_text": "Murmur · Self-hosted ASMR Platform",
     "default_user_role": "user",
     "rss_enabled": "true",
+    # PRD-019: multi storage backend
+    "storage_backend": "local",
+    "s3_endpoint": "",
+    "s3_bucket": "",
+    "s3_access_key": "",
+    "s3_secret_key": "",
+    # PRD-020: sensitive words (comma separated)
+    "sensitive_words": "",
 }
 
 
@@ -179,18 +222,32 @@ def _migrate_db():
     insp = inspect(engine)
     with engine.connect() as conn:
         existing_tables = insp.get_table_names()
-        
+
         if "posts" in existing_tables:
             cols = [c["name"] for c in insp.get_columns("posts")]
             if "featured" not in cols:
                 conn.execute(text("ALTER TABLE posts ADD COLUMN featured BOOLEAN DEFAULT 0"))
                 conn.commit()
-        
+            # PRD-018: transcode status (old posts default to "ready")
+            if "status" not in cols:
+                conn.execute(text("ALTER TABLE posts ADD COLUMN status VARCHAR(20) DEFAULT 'ready'"))
+                conn.commit()
+            # PRD-020: content hash for duplicate detection
+            if "content_hash" not in cols:
+                conn.execute(text("ALTER TABLE posts ADD COLUMN content_hash VARCHAR(64)"))
+                conn.commit()
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_posts_content_hash ON posts (content_hash)"))
+                conn.commit()
+            # PRD-021: total accumulated play time
+            if "total_play_time" not in cols:
+                conn.execute(text("ALTER TABLE posts ADD COLUMN total_play_time FLOAT DEFAULT 0"))
+                conn.commit()
+
         new_tables = ["tags", "post_tags", "playlists", "playlist_items", "comments"]
         for t in new_tables:
             if t not in existing_tables:
                 pass
-        
+
         if "playlists" in existing_tables:
             cols = [c["name"] for c in insp.get_columns("playlists")]
             if "is_public" not in cols:
