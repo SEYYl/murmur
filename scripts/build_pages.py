@@ -27,6 +27,12 @@ def main():
     with open(index_path, "r", encoding="utf-8") as f:
         content = f.read()
 
+    content = content.replace('href="/static/', 'href="/')
+    content = content.replace('src="/static/', 'src="/')
+
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
     config_path = os.path.join(DIST_DIR, "config.js")
     if API_BASE:
         config_content = f"window.__API_BASE__ = '{API_BASE}';\n"
