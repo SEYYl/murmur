@@ -65,7 +65,7 @@ function dur(s) { if(!s||s<=0) return ''; const m=Math.floor(s/60),s2=Math.floor
 function fs(b) { if(!b) return ''; if(b<1024) return `${b}B`; if(b<1048576) return `${(b/1024).toFixed(0)}KB`; return `${(b/1048576).toFixed(1)}MB`; }
 function dt(d) { if(!d) return ''; const t=new Date(d),n=new Date(),diff=n-t; if(diff<6e4) return '刚刚'; if(diff<36e5) return `${Math.floor(diff/6e4)}分钟前`; if(diff<864e5) return `${Math.floor(diff/36e5)}小时前`; return `${t.getMonth()+1}/${t.getDate()}`; }
 
-let state = { view:'home', postId:null, cat:null, sort:'latest', search:'', page:1, user:null };
+let state = { view:'home', postId:null, cat:null, sort:'latest', search:'', page:1, user:null, params:{} };
 
 function toast(msg, t='info') {
   const el = document.createElement('div'); el.className = `toast ${t}`;
@@ -172,7 +172,14 @@ function updateUI() {
 
 // ─── Navigation ───
 function navigate(view, data) {
-  state.view = view||'home'; if (data!==undefined) state.postId = data;
+  state.view = view||'home';
+  state.params = {};
+  if (typeof data === 'object' && data !== null) {
+    state.params = { ...data };
+    if (data.postId !== undefined) state.postId = data.postId;
+  } else if (data !== undefined) {
+    state.postId = data;
+  }
   const c = $('content'); if (!c) return;
   c.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   if (view==='upload') renderUpload();
@@ -185,6 +192,9 @@ function navigate(view, data) {
   else if (view==='admin-settings') renderAdminSettings();
   else if (view==='favorites') renderFavorites();
   else if (view==='history') renderHistory();
+  else if (view==='tag-posts') renderTagPosts();
+  else if (view==='playlists') renderPlaylists();
+  else if (view==='playlist-detail') renderPlaylistDetail();
   else renderHome();
   window.scrollTo({top:0,behavior:'smooth'});
 }
@@ -202,6 +212,20 @@ async function loadCats() {
     list.querySelectorAll('.cat-item').forEach(x => x.classList.toggle('active', x===b));
     navigate('home');
   }));
+
+  const sidebar = $('sidebar');
+  if (sidebar && state.user) {
+    let plSection = sidebar.querySelector('.playlist-section');
+    if (!plSection) {
+      plSection = document.createElement('div');
+      plSection.className = 'sidebar-section playlist-section';
+      sidebar.appendChild(plSection);
+    }
+    plSection.innerHTML = `<h3>🎵 我的歌单</h3>
+      <div class="cat-list">
+        <button class="cat-item" onclick="navigate('playlists')">📋 全部歌单</button>
+      </div>`;
+  }
 }
 
 // ─── Home ───
@@ -219,11 +243,18 @@ async function renderHome() {
     <input id="si" placeholder="搜索音频、视频..." value="${esc(state.search)}" onkeydown="if(event.key==='Enter'){state.search=this.value;state.page=1;navigate('home')}">
     <button onclick="state.search=$('si').value;state.page=1;navigate('home')">🔍</button>
   </div>
+  <div id="featured-section" style="display:none;margin-bottom:20px">
+    <h2 style="font-size:1rem;margin-bottom:10px">✨ 编辑推荐</h2>
+    <div id="featured-scroll" style="display:flex;gap:12px;overflow-x:auto;padding-bottom:8px"><div class="loading"><div class="spinner"></div></div></div>
+  </div>
   <div class="sort-tabs">
     <button class="sort-tab ${state.sort==='latest'?'active':''}" onclick="state.sort='latest';state.page=1;navigate('home')">最新</button>
     <button class="sort-tab ${state.sort==='popular'?'active':''}" onclick="state.sort='popular';state.page=1;navigate('home')">最多播放</button>
   </div>
   <div id="posts"><div class="loading"><div class="spinner"></div></div></div>`;
+  if (!state.cat && !state.search) {
+    loadFeatured();
+  }
   await loadPosts();
 }
 
@@ -247,6 +278,7 @@ async function loadPosts() {
       ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
       <div class="overlay"><div class="play">▶</div></div>
       <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
+      ${p.featured?'<div class="badge" style="right:auto;left:8px;top:8px;background:var(--accent)">✨ 精选</div>':''}
       ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
       ${rp?`<div class="resume-badge">▶ ${dur(rp.currentTime)}</div>`:''}
       <button class="fav-btn-card ${isFav?'active':''}" onclick="event.stopPropagation();toggleCardFavorite(this,${p.id})" title="收藏">
@@ -254,9 +286,10 @@ async function loadPosts() {
       </button>
     </div><div class="info">
       <h3>${esc(p.title)}</h3>
-      <div class="meta"><span>👁 ${p.views}</span><span>❤️ ${favCount}</span></div>
-      <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+      <div class="meta"><span>👁 ${p.views}</span><span>❤️ ${favCount}</span><span>💬 ${p.comment_count||0}</span></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap">
         ${p.category?`<div class="tag">${p.category.icon} ${esc(p.category.name)}</div>`:''}
+        ${(p.tags||[]).slice(0,3).map(t=>`<div class="tag" style="cursor:pointer" onclick="event.stopPropagation();navigate('tag-posts',{tagId:${t.id}})">#${esc(t.name)}</div>`).join('')}
         <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">＋</button>
       </div>
     </div>`;
@@ -481,31 +514,58 @@ async function renderPost() {
   const canEdit = isAdmin || isOwner;
   const favCount = p.favorite_count || 0;
   const isFav = p.is_favorited || false;
+  const commentCount = p.comment_count || 0;
 
   let html = `<button class="back" onclick="navigate()">← 返回</button>
     <div id="queue-bar" class="queue-bar"></div>
     <div class="detail">${playerHTML}
       <div class="info">
-        <h1>${esc(p.title)}</h1>
+        <h1>${esc(p.title)} ${p.featured?'<span style="font-size:.8rem;background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;margin-left:8px;vertical-align:middle">✨ 精选</span>':''}</h1>
         <div class="meta">
           ${p.category?`<span>${p.category.icon} ${esc(p.category.name)}</span>`:''}
           ${p.duration>0?`<span>⏱ ${dur(p.duration)}</span>`:''}
           ${p.file_size?`<span>📦 ${fs(p.file_size)}</span>`:''}
           <span>👁 ${p.views}</span>
           <span>❤️ ${favCount}</span>
+          <span>💬 ${commentCount}</span>
           <span>📅 ${dt(p.created_at)}</span>
+          ${p.updated_at && p.updated_at !== p.created_at ? `<span>✏️ ${dt(p.updated_at)} 更新</span>` : ''}
           ${p.user?`<span>👤 ${esc(p.user.username)}</span>`:''}
         </div>
+        ${p.tags && p.tags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          ${p.tags.map(t=>`<span class="tag" style="cursor:pointer" onclick="navigate('tag-posts',{tagId:${t.id}})">#${esc(t.name)}</span>`).join('')}
+        </div>` : ''}
         ${p.description?`<div class="desc">${esc(p.description)}</div>`:''}
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
           <button class="btn ${isFav?'btn-primary':'btn-secondary'}" id="fav-btn" onclick="toggleFavorite(${pid})">
             ${isFav?'❤️ 已收藏':'🤍 收藏'} <span id="fav-count">${favCount}</span>
           </button>
           <button class="btn btn-secondary" onclick="addToQueue({id:${pid},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">➕ 加入队列</button>
+          ${state.user?`<button class="btn btn-secondary" onclick="showAddToPlaylist(${pid})">🎵 加到歌单</button>`:''}
+          ${isAdmin?`<button class="btn ${p.featured?'btn-primary':'btn-secondary'}" id="feat-btn" onclick="toggleFeatured(${pid},${p.featured})">
+            ${p.featured?'⭐ 已精选':'☆ 加精'}
+          </button>`:''}
           ${canEdit?`<button class="btn btn-secondary" onclick="navigate('edit',${pid})">✏️ 编辑</button>`:''}
           ${canEdit?`<button class="btn btn-secondary" style="color:#f87171" onclick="deletePost(${pid})">🗑 删除</button>`:''}
         </div>
       </div>
+    </div>
+    <div id="related-section" style="margin-top:24px;display:none">
+      <h2 style="font-size:1rem;margin-bottom:12px">🔗 相关推荐</h2>
+      <div id="related-scroll" style="display:flex;gap:12px;overflow-x:auto;padding-bottom:8px"></div>
+    </div>
+    <div id="comments-section" style="margin-top:24px">
+      <h2 style="font-size:1rem;margin-bottom:12px">💬 评论 <span style="color:var(--text3);font-weight:400;font-size:.85rem">(${commentCount})</span></h2>
+      ${state.user ? `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px;margin-bottom:16px">
+        <textarea id="comment-input" placeholder="写下你的评论..." style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:10px 12px;color:var(--text);font-size:.85rem;resize:vertical;min-height:80px;font-family:inherit"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px">
+          <button class="btn btn-primary" onclick="submitComment(${pid})">发布评论</button>
+        </div>
+      </div>` : `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px;text-align:center;margin-bottom:16px">
+        <p style="color:var(--text3);margin-bottom:8px">登录后可以发表评论</p>
+        <button class="btn btn-primary" onclick="showLogin()">去登录</button>
+      </div>`}
+      <div id="comments-list"><div class="loading"><div class="spinner"></div></div></div>
     </div>`;
   con.innerHTML = html;
   updateQueueBar();
@@ -654,10 +714,13 @@ async function renderPost() {
       if (apo) apo.style.display = 'flex';
     }
   }
+
+  loadRelated(pid);
+  loadComments(pid);
 }
 
 // ─── Upload ───
-let _file = null, _cover = null, _selCat = null;
+let _file = null, _cover = null, _selCat = null, _tagSuggestions = [];
 
 async function renderUpload() {
   if(!state.user) { showLogin(); return; }
@@ -673,6 +736,13 @@ async function renderUpload() {
         <div class="form-group"><label>📖 描述</label><textarea id="desc" placeholder="简单描述一下这个内容..."></textarea></div>
         <div class="form-group"><label>🏷️ 分类</label>
           <div class="cat-picker" id="cat-picker">${cats.map(c=>`<div class="cat-option" data-id="${c.id}" onclick="selectCat(${c.id})"><div class="cg-icon">${c.icon}</div>${esc(c.name)}</div>`).join('')}</div>
+        </div>
+        <div class="form-group"><label>🏷️ 标签（逗号分隔）</label>
+          <div style="position:relative">
+            <input id="tags" placeholder="例如：助眠, 雨声, 放松" oninput="onTagInput(this)" onblur="setTimeout(()=>{const s=$('tag-suggest');if(s)s.style.display='none'},200)" autocomplete="off">
+            <div id="tag-suggest" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-top:4px;max-height:160px;overflow-y:auto;z-index:10"></div>
+          </div>
+          <div style="font-size:.75rem;color:var(--text3);margin-top:4px">多个标签用英文或中文逗号分隔</div>
         </div>
         <div class="form-group"><label>🖼️ 封面（可选）</label><button class="btn btn-secondary" onclick="$('ci').click()">选择封面图片</button>
           <input type="file" id="ci" accept="image/*" onchange="hc(event)" style="display:none">
@@ -715,10 +785,13 @@ async function submitUpload() {
   if(!title) { toast('请输入标题', 'error'); return; }
   if(!_file) { toast('请选择文件', 'error'); return; }
   if(!_selCat) { toast('请选择分类', 'error'); return; }
+  const tagStr = ($('tags')?.value||'').trim();
+  const tagList = tagStr ? tagStr.split(/[,，]/).map(t=>t.trim()).filter(t=>t) : [];
   const fd = new FormData();
   fd.append('title', title);
   fd.append('description', ($('desc')?.value||'').trim());
   fd.append('category_id', _selCat);
+  if (tagList.length) fd.append('tags', JSON.stringify(tagList));
   fd.append('file', _file);
   if(_cover) fd.append('cover', _cover);
   const btn = qs('.btn-primary'); if(btn){btn.disabled=true;btn.innerHTML='⏳ 上传中...'}
@@ -752,6 +825,13 @@ async function renderEdit() {
         <div class="form-group"><label>🏷️ 分类</label>
           <div class="cat-picker" id="ecat-picker">${cats.map(c=>`<div class="cat-option ${_selCat===c.id?'selected':''}" data-id="${c.id}" onclick="selectEditCat(${c.id})"><div class="cg-icon">${c.icon}</div>${esc(c.name)}</div>`).join('')}</div>
         </div>
+        <div class="form-group"><label>🏷️ 标签（逗号分隔）</label>
+          <div style="position:relative">
+            <input id="etags" value="${esc((p.tags||[]).map(t=>t.name).join(', '))}" placeholder="例如：助眠, 雨声, 放松" oninput="onTagInput(this,'etag-suggest')" onblur="setTimeout(()=>{const s=$('etag-suggest');if(s)s.style.display='none'},200)" autocomplete="off">
+            <div id="etag-suggest" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-top:4px;max-height:160px;overflow-y:auto;z-index:10"></div>
+          </div>
+          <div style="font-size:.75rem;color:var(--text3);margin-top:4px">多个标签用英文或中文逗号分隔</div>
+        </div>
         <div class="form-group"><label>🖼️ 封面（可选，不更换则留空）</label>
           ${cover?`<div style="margin-bottom:10px"><img src="${cover}" style="max-width:180px;border-radius:8px;border:1px solid var(--border)"></div>`:''}
           <button class="btn btn-secondary" onclick="$('eci').click()">${cover?'更换封面':'选择封面图片'}</button>
@@ -779,10 +859,13 @@ async function submitEdit(id) {
   const title = $('etitle')?.value.trim();
   if(!title) { toast('请输入标题', 'error'); return; }
   if(!_selCat) { toast('请选择分类', 'error'); return; }
+  const tagStr = ($('etags')?.value||'').trim();
+  const tagList = tagStr ? tagStr.split(/[,，]/).map(t=>t.trim()).filter(t=>t) : [];
   const fd = new FormData();
   fd.append('title', title);
   fd.append('description', ($('edesc')?.value||'').trim());
   fd.append('category_id', _selCat);
+  if (tagList.length) fd.append('tags', JSON.stringify(tagList));
   if(_editCover) fd.append('cover', _editCover);
   const btn = qs('.btn-primary'); if(btn){btn.disabled=true;btn.innerHTML='⏳ 保存中...'}
   const r = await api(`/api/posts/${id}`, { method:'PUT', body:fd });
@@ -1061,6 +1144,7 @@ async function renderAdmin() {
             </div>
           </div>
           <div style="display:flex;gap:6px;flex-shrink:0">
+            ${isAdmin?`<button class="btn btn-ghost btn-icon" onclick="toggleAdminFeatured(${p.id},${p.featured})" title="${p.featured?'取消精选':'设为精选'}">${p.featured?'⭐':'☆'}</button>`:''}
             <button class="btn btn-ghost" onclick="navigate('post',${p.id})">👁 查看</button>
             ${canEdit?`<button class="btn btn-ghost" onclick="navigate('edit',${p.id})">✏️ 编辑</button>`:''}
             ${canEdit?`<button class="btn btn-ghost" style="color:#f87171" onclick="deleteItem(${p.id})">🗑 删除</button>`:''}
@@ -1572,6 +1656,572 @@ function updateQueueBar() {
   }
 }
 function rmFromQ(id) { removeFromQueue(id); }
+
+// ═══════════════════════════════════════
+// ─── V1.3 Features (PRD-008 ~ PRD-012) ───
+// ═══════════════════════════════════════
+
+// ─── PRD-008 Tags ───
+let _tagPage = 1;
+
+async function onTagInput(input, suggestId) {
+  const sid = suggestId || 'tag-suggest';
+  const box = $(sid);
+  if (!box) return;
+  const val = input.value;
+  const parts = val.split(/[,，]/);
+  const last = parts[parts.length - 1].trim();
+  if (!last) { box.style.display = 'none'; return; }
+  const data = await api(`/api/tags?q=${encodeURIComponent(last)}&limit=5&sort=hot`);
+  const tags = data || [];
+  if (!tags.length) { box.style.display = 'none'; return; }
+  box.innerHTML = tags.map(t => `<div style="padding:8px 12px;cursor:pointer;font-size:.85rem" onmousedown="pickTag('${input.id}','${sid}','${esc(t.name)}')">#${esc(t.name)} <span style="color:var(--text3);font-size:.75rem">${t.use_count}</span></div>`).join('');
+  box.style.display = 'block';
+}
+
+function pickTag(inputId, suggestId, name) {
+  const input = $(inputId);
+  if (!input) return;
+  const val = input.value;
+  const parts = val.split(/[,，]/);
+  parts[parts.length - 1] = ' ' + name + ', ';
+  input.value = parts.join(',').replace(/,\s*,/g, ',').replace(/^,\s*/, '').trim();
+  input.focus();
+  const box = $(suggestId);
+  if (box) box.style.display = 'none';
+}
+
+async function renderTagPosts() {
+  const tagId = state.params.tagId;
+  if (!tagId) { navigate('home'); return; }
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div id="tag-header"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="tag-posts"><div class="loading"><div class="spinner"></div></div></div>`;
+  _tagPage = 1;
+  await loadTagPosts(tagId);
+}
+
+async function loadTagPosts(tagId) {
+  const data = await api(`/api/tags/${tagId}/posts?page=${_tagPage}&sort=latest`);
+  const header = $('tag-header');
+  const list = $('tag-posts');
+  if (!data || !data.tag) {
+    if (list) list.innerHTML = '<div class="empty"><p>标签不存在</p><button class="btn btn-primary" onclick="navigate()">返回</button></div>';
+    return;
+  }
+  if (header) {
+    header.innerHTML = `<div class="page-header">
+      <div><h1>#${esc(data.tag.name)}</h1><div class="sub">${data.tag.use_count || 0} 个内容</div></div>
+    </div>
+    <div class="sort-tabs">
+      <button class="sort-tab active">最新</button>
+    </div>`;
+  }
+  const items = data.items || [];
+  if (!items.length) {
+    if (list) list.innerHTML = '<div class="empty"><div class="icon">🏷️</div><p>该标签下暂无内容</p></div>';
+    return;
+  }
+  const grid = document.createElement('div'); grid.className = 'grid';
+  for(const p of items) {
+    const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
+    const card = document.createElement('div'); card.className = 'card';
+    card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',p.id); };
+    const rp = getResumePos(p.id);
+    const isFav = p.is_favorited || false;
+    const favCount = p.favorite_count || 0;
+    card.innerHTML = `<div class="cover">
+      ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+      <div class="overlay"><div class="play">▶</div></div>
+      <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
+      ${p.featured?'<div class="badge" style="right:auto;left:8px;top:8px;background:var(--accent)">✨ 精选</div>':''}
+      ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
+      ${rp?`<div class="resume-badge">▶ ${dur(rp.currentTime)}</div>`:''}
+      <button class="fav-btn-card ${isFav?'active':''}" onclick="event.stopPropagation();toggleCardFavorite(this,${p.id})" title="收藏">
+        ${isFav?'❤️':'🤍'}
+      </button>
+    </div><div class="info">
+      <h3>${esc(p.title)}</h3>
+      <div class="meta"><span>👁 ${p.views}</span><span>❤️ ${favCount}</span><span>💬 ${p.comment_count||0}</span></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap">
+        ${p.category?`<div class="tag">${p.category.icon} ${esc(p.category.name)}</div>`:''}
+        ${(p.tags||[]).slice(0,3).map(t=>`<div class="tag" style="cursor:pointer" onclick="event.stopPropagation();navigate('tag-posts',{tagId:${t.id}})">#${esc(t.name)}</div>`).join('')}
+        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">＋</button>
+      </div>
+    </div>`;
+    grid.appendChild(card);
+  }
+  if (list) {
+    list.innerHTML = ''; list.appendChild(grid);
+    if(data.total_pages>1) {
+      const pg = document.createElement('div'); pg.style.cssText='display:flex;justify-content:center;gap:8px;margin-top:24px';
+      if(data.page>1) pg.innerHTML+=`<button class="btn btn-secondary" onclick="_tagPage=${data.page-1};loadTagPosts(${tagId})">← 上一页</button>`;
+      if(data.page<data.total_pages) pg.innerHTML+=`<button class="btn btn-secondary" onclick="_tagPage=${data.page+1};loadTagPosts(${tagId})">下一页 →</button>`;
+      list.appendChild(pg);
+    }
+  }
+}
+
+// ─── PRD-009 Playlists ───
+let _plTab = 'mine';
+let _plPage = 1;
+
+async function renderPlaylists() {
+  if (!state.user) { showLogin(); return; }
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header">
+      <div><h1>🎵 歌单</h1><div class="sub">收集你喜欢的声音</div></div>
+      <button class="btn btn-primary" onclick="showCreatePlaylist()">➕ 新建歌单</button>
+    </div>
+    <div class="sort-tabs">
+      <button class="sort-tab ${_plTab==='mine'?'active':''}" onclick="_plTab='mine';_plPage=1;renderPlaylists()">我的歌单</button>
+      <button class="sort-tab ${_plTab==='discover'?'active':''}" onclick="_plTab='discover';_plPage=1;renderPlaylists()">发现公开</button>
+    </div>
+    <div id="playlist-list"><div class="loading"><div class="spinner"></div></div></div>`;
+  await loadPlaylistList();
+}
+
+async function loadPlaylistList() {
+  const list = $('playlist-list');
+  if (!list) return;
+  let url = `/api/playlists?page=${_plPage}`;
+  if (_plTab === 'mine') url += '&mine=1';
+  const data = await api(url);
+  const items = data?.items || [];
+  if (!items.length) {
+    list.innerHTML = `<div class="empty"><div class="icon">🎵</div><p>${_plTab==='mine'?'还没有创建歌单':'暂无公开歌单'}</p></div>`;
+    return;
+  }
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px';
+  for (const pl of items) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.cursor = 'pointer';
+    card.onclick = () => navigate('playlist-detail', { playlistId: pl.id });
+    const isMine = pl.user && state.user && pl.user.id === state.user.id;
+    card.innerHTML = `<div class="cover" style="aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center">
+      <span style="font-size:3rem;opacity:.3">🎵</span>
+      <div class="overlay"><div class="play">▶</div></div>
+      ${pl.is_public?'<div class="badge" style="right:auto;left:8px;top:8px">🌐 公开</div>':'<div class="badge" style="right:auto;left:8px;top:8px">🔒 私密</div>'}
+    </div><div class="info">
+      <h3>${esc(pl.title)}</h3>
+      <div class="meta">
+        <span>📦 ${pl.item_count || 0} 首</span>
+        ${pl.user?`<span>👤 ${esc(pl.user.username)}</span>`:''}
+      </div>
+      ${pl.description?`<div style="font-size:.8rem;color:var(--text3);margin-top:4px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(pl.description)}</div>`:''}
+      ${isMine ? `<div style="display:flex;gap:6px;margin-top:8px">
+        <button class="btn btn-ghost btn-icon" onclick="event.stopPropagation();editPlaylist(${pl.id},'${esc(pl.title)}','${esc(pl.description||'')}',${pl.is_public})" title="编辑">✏️</button>
+        <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="event.stopPropagation();deletePlaylist(${pl.id})" title="删除">🗑</button>
+      </div>` : ''}
+    </div>`;
+    grid.appendChild(card);
+  }
+  list.innerHTML = ''; list.appendChild(grid);
+  if (data.total_pages > 1) {
+    const pg = document.createElement('div'); pg.style.cssText='display:flex;justify-content:center;gap:8px;margin-top:24px';
+    if(data.page>1) pg.innerHTML+=`<button class="btn btn-secondary" onclick="_plPage=${data.page-1};loadPlaylistList()">← 上一页</button>`;
+    if(data.page<data.total_pages) pg.innerHTML+=`<button class="btn btn-secondary" onclick="_plPage=${data.page+1};loadPlaylistList()">下一页 →</button>`;
+    list.appendChild(pg);
+  }
+}
+
+function showCreatePlaylist() {
+  if (qs('.pl-modal')) return;
+  const o = document.createElement('div'); o.className = 'auth-modal'; o.classList.add('pl-modal');
+  o.innerHTML = `<div class="auth-box">
+    <h2>➕ 新建歌单</h2>
+    <div class="input-group"><label>歌单名称</label><input id="pl-title" placeholder="给歌单取个名字..."></div>
+    <div class="input-group"><label>描述（可选）</label><textarea id="pl-desc" placeholder="简单描述一下..." style="min-height:80px"></textarea></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+      <input type="checkbox" id="pl-public" checked>
+      <label for="pl-public" style="font-size:.85rem;cursor:pointer">公开歌单（其他人可以看到）</label>
+    </div>
+    <div class="auth-actions">
+      <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
+      <button class="btn btn-primary" onclick="createPlaylist()">创建</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => $('pl-title')?.focus(), 100);
+}
+
+async function createPlaylist() {
+  const title = $('pl-title')?.value.trim();
+  if (!title) { toast('请输入歌单名称', 'error'); return; }
+  const description = $('pl-desc')?.value.trim() || '';
+  const is_public = $('pl-public')?.checked || false;
+  const r = await api('/api/playlists', {
+    method: 'POST',
+    body: JSON.stringify({ title, description, is_public })
+  });
+  if (r?.id) {
+    toast('✅ 歌单创建成功', 'success');
+    qs('.pl-modal')?.remove();
+    loadPlaylistList();
+  } else {
+    toast(r?.detail || '创建失败', 'error');
+  }
+}
+
+function editPlaylist(id, title, desc, isPublic) {
+  if (qs('.pl-modal')) return;
+  const o = document.createElement('div'); o.className = 'auth-modal'; o.classList.add('pl-modal');
+  o.innerHTML = `<div class="auth-box">
+    <h2>✏️ 编辑歌单</h2>
+    <div class="input-group"><label>歌单名称</label><input id="epl-title" value="${esc(title)}"></div>
+    <div class="input-group"><label>描述（可选）</label><textarea id="epl-desc" style="min-height:80px">${esc(desc)}</textarea></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+      <input type="checkbox" id="epl-public" ${isPublic?'checked':''}>
+      <label for="epl-public" style="font-size:.85rem;cursor:pointer">公开歌单</label>
+    </div>
+    <div class="auth-actions">
+      <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
+      <button class="btn btn-primary" onclick="savePlaylistEdit(${id})">保存</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+}
+
+async function savePlaylistEdit(id) {
+  const title = $('epl-title')?.value.trim();
+  if (!title) { toast('请输入歌单名称', 'error'); return; }
+  const description = $('epl-desc')?.value.trim() || '';
+  const is_public = $('epl-public')?.checked || false;
+  const r = await api(`/api/playlists/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ title, description, is_public })
+  });
+  if (r?.ok) {
+    toast('✅ 保存成功', 'success');
+    qs('.pl-modal')?.remove();
+    if (state.view === 'playlists') loadPlaylistList();
+    else if (state.view === 'playlist-detail') renderPlaylistDetail();
+  } else {
+    toast(r?.detail || '保存失败', 'error');
+  }
+}
+
+async function deletePlaylist(id) {
+  if (!confirm('确定删除这个歌单吗？歌单内的内容不会被删除。')) return;
+  const r = await api(`/api/playlists/${id}`, { method: 'DELETE' });
+  if (r?.ok) {
+    toast('✅ 已删除', 'success');
+    if (state.view === 'playlists') loadPlaylistList();
+    else navigate('playlists');
+  } else {
+    toast(r?.detail || '删除失败', 'error');
+  }
+}
+
+async function renderPlaylistDetail() {
+  const plId = state.params.playlistId;
+  if (!plId) { navigate('playlists'); return; }
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate('playlists')">← 返回</button>
+    <div id="pl-detail-header"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="pl-items"><div class="loading"><div class="spinner"></div></div></div>`;
+  const pl = await api(`/api/playlists/${plId}`);
+  if (!pl) {
+    con.innerHTML = '<div class="empty"><p>歌单不存在</p><button class="btn btn-primary" onclick="navigate(\'playlists\')">返回</button></div>';
+    return;
+  }
+  const isMine = pl.user && state.user && pl.user.id === state.user.id;
+  const header = $('pl-detail-header');
+  if (header) {
+    header.innerHTML = `<div class="page-header">
+      <div style="display:flex;gap:20px;align-items:center">
+        <div style="width:140px;height:140px;background:var(--bg2);border-radius:var(--rs);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <span style="font-size:4rem;opacity:.3">🎵</span>
+        </div>
+        <div>
+          <h1 style="margin:0">${esc(pl.title)} ${pl.is_public?'<span style="font-size:.8rem;background:var(--bg3);color:var(--text3);padding:2px 8px;border-radius:4px;margin-left:8px;vertical-align:middle">🌐 公开</span>':'<span style="font-size:.8rem;background:var(--bg3);color:var(--text3);padding:2px 8px;border-radius:4px;margin-left:8px;vertical-align:middle">🔒 私密</span>'}</h1>
+          <div class="sub" style="margin-top:6px">${pl.user?'👤 ' + esc(pl.user.username) + ' · ':''}${pl.item_count || 0} 首内容</div>
+          ${pl.description?`<div style="margin-top:8px;color:var(--text2);font-size:.9rem">${esc(pl.description)}</div>`:''}
+          <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="playPlaylistAll(${plId})">▶ 播放全部</button>
+            ${isMine?`<button class="btn btn-secondary" onclick="editPlaylist(${pl.id},'${esc(pl.title)}','${esc(pl.description||'')}',${pl.is_public})">✏️ 编辑</button>`:''}
+            ${isMine?`<button class="btn btn-secondary" style="color:#f87171" onclick="deletePlaylist(${pl.id})">🗑 删除</button>`:''}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+  const items = pl.items || [];
+  const list = $('pl-items');
+  if (list) {
+    if (!items.length) {
+      list.innerHTML = '<div class="empty"><div class="icon">🎵</div><p>歌单还是空的</p></div>';
+    } else {
+      let html = '<div style="display:flex;flex-direction:column;gap:8px">';
+      items.forEach((item, idx) => {
+        const post = item.post || item;
+        if (!post) return;
+        const isV = post.file_type === 'video';
+        const cv = post.cover_image ? `${API}/${post.cover_image}` : '';
+        html += `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px;cursor:pointer" onclick="navigate('post',${post.id})">
+          <div style="width:40px;text-align:center;color:var(--text3);font-size:.9rem;flex-shrink:0">${idx + 1}</div>
+          <div style="width:120px;height:68px;border-radius:8px;overflow:hidden;background:var(--bg3);flex-shrink:0;position:relative">
+            ${cv?`<img src="${cv}" style="width:100%;height:100%;object-fit:cover">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;opacity:.3">${isV?'🎬':'🎵'}</div>`}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(post.title)}</div>
+            <div style="font-size:.8rem;color:var(--text3);margin-top:2px">
+              ${post.category?post.category.icon + ' ' + esc(post.category.name) + ' · ':''}${dur(post.duration)}
+            </div>
+          </div>
+          ${isMine?`<button class="btn btn-ghost btn-icon" style="color:#f87171;flex-shrink:0" onclick="event.stopPropagation();removeFromPlaylist(${plId},${post.id})" title="从歌单移除">✕</button>`:''}
+        </div>`;
+      });
+      html += '</div>';
+      list.innerHTML = html;
+    }
+  }
+}
+
+async function playPlaylistAll(plId) {
+  const pl = await api(`/api/playlists/${plId}`);
+  const items = pl?.items || [];
+  if (!items.length) { toast('歌单是空的', 'error'); return; }
+  _playQueue = [];
+  items.forEach(item => {
+    const post = item.post || item;
+    if (post) _playQueue.push({ id: post.id, title: post.title, file_type: post.file_type, duration: post.duration || 0 });
+  });
+  saveQueue();
+  if (_playQueue.length) {
+    const first = _playQueue.shift();
+    saveQueue();
+    navigate('post', first.id);
+    toast(`▶ 开始播放歌单（共 ${_playQueue.length + 1} 首）`, 'info');
+  }
+}
+
+async function removeFromPlaylist(plId, postId) {
+  if (!confirm('确定从歌单中移除吗？')) return;
+  const r = await api(`/api/playlists/${plId}/items/${postId}`, { method: 'DELETE' });
+  if (r?.ok) {
+    toast('✅ 已移除', 'success');
+    renderPlaylistDetail();
+  } else {
+    toast(r?.detail || '操作失败', 'error');
+  }
+}
+
+function showAddToPlaylist(postId) {
+  if (!state.user) { showLogin(); return; }
+  if (qs('.atp-modal')) return;
+  const o = document.createElement('div'); o.className = 'auth-modal'; o.classList.add('atp-modal');
+  o.innerHTML = `<div class="auth-box">
+    <h2>🎵 添加到歌单</h2>
+    <div id="atp-list" style="max-height:300px;overflow-y:auto;margin-bottom:12px"><div class="loading"><div class="spinner"></div></div></div>
+    <div class="auth-actions">
+      <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
+      <button class="btn btn-ghost" onclick="showCreatePlaylistFromAtp()">➕ 新建歌单</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+  loadMyPlaylistsForAdd(postId);
+}
+
+async function loadMyPlaylistsForAdd(postId) {
+  const list = $('atp-list');
+  if (!list) return;
+  const data = await api('/api/playlists?mine=1&page_size=100');
+  const items = data?.items || [];
+  if (!items.length) {
+    list.innerHTML = '<div class="empty" style="padding:20px"><p>还没有歌单</p></div>';
+    return;
+  }
+  list.innerHTML = items.map(pl => `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--border);cursor:pointer" onclick="addToPlaylist(${pl.id},${postId})">
+      <span style="font-size:1.5rem">🎵</span>
+      <div style="flex:1">
+        <div style="font-weight:500;font-size:.9rem">${esc(pl.title)}</div>
+        <div style="font-size:.75rem;color:var(--text3)">${pl.item_count || 0} 首</div>
+      </div>
+      <span style="color:var(--accent)">＋</span>
+    </div>
+  `).join('');
+}
+
+function showCreatePlaylistFromAtp() {
+  qs('.atp-modal')?.remove();
+  showCreatePlaylist();
+}
+
+async function addToPlaylist(plId, postId) {
+  const r = await api(`/api/playlists/${plId}/items/${postId}`, { method: 'POST' });
+  if (r?.ok) {
+    toast('✅ 已添加到歌单', 'success');
+    qs('.atp-modal')?.remove();
+  } else {
+    toast(r?.detail || '添加失败', 'error');
+  }
+}
+
+// ─── PRD-010 Related ───
+async function loadRelated(postId) {
+  const section = $('related-section');
+  const scroll = $('related-scroll');
+  if (!section || !scroll) return;
+  const data = await api(`/api/posts/${postId}/related?limit=6`);
+  const items = data?.items || [];
+  if (!items.length) return;
+  section.style.display = 'block';
+  scroll.innerHTML = items.map(p => {
+    const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
+    return `<div class="card" style="width:200px;flex-shrink:0;cursor:pointer" onclick="navigate('post',${p.id})">
+      <div class="cover">
+        ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+        <div class="overlay"><div class="play">▶</div></div>
+        <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
+        ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
+      </div><div class="info">
+        <h3 style="font-size:.85rem">${esc(p.title)}</h3>
+        <div class="meta" style="font-size:.75rem"><span>👁 ${p.views}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─── PRD-011 Featured ───
+async function loadFeatured() {
+  const section = $('featured-section');
+  const scroll = $('featured-scroll');
+  if (!section || !scroll) return;
+  const data = await api('/api/posts/featured?limit=10');
+  const items = data?.items || [];
+  if (!items.length) return;
+  section.style.display = 'block';
+  scroll.innerHTML = items.map(p => {
+    const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
+    return `<div class="card" style="width:220px;flex-shrink:0;cursor:pointer" onclick="if(${isV}&&!state.user){showLogin();return;} navigate('post',${p.id})">
+      <div class="cover">
+        ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+        <div class="overlay"><div class="play">▶</div></div>
+        <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
+        <div class="badge" style="right:auto;left:8px;top:8px;background:var(--accent)">✨ 精选</div>
+        ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
+      </div><div class="info">
+        <h3 style="font-size:.85rem">${esc(p.title)}</h3>
+        <div class="meta" style="font-size:.75rem"><span>👁 ${p.views}</span><span>❤️ ${p.favorite_count||0}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleFeatured(postId, current) {
+  const btn = $('feat-btn');
+  const r = await api(`/api/admin/posts/${postId}/featured`, {
+    method: 'PUT',
+    body: JSON.stringify({ featured: !current })
+  });
+  if (r?.ok) {
+    toast(`✅ ${!current ? '已设为精选' : '已取消精选'}`, 'success');
+    renderPost();
+  } else {
+    toast(r?.detail || '操作失败', 'error');
+  }
+}
+
+async function toggleAdminFeatured(postId, current) {
+  const r = await api(`/api/admin/posts/${postId}/featured`, {
+    method: 'PUT',
+    body: JSON.stringify({ featured: !current })
+  });
+  if (r?.ok) {
+    toast(`✅ ${!current ? '已设为精选' : '已取消精选'}`, 'success');
+    renderAdmin();
+  } else {
+    toast(r?.detail || '操作失败', 'error');
+  }
+}
+
+// ─── PRD-012 Comments ───
+let _commentPage = 1;
+
+async function loadComments(postId) {
+  const list = $('comments-list');
+  if (!list) return;
+  _commentPage = 1;
+  const data = await api(`/api/posts/${postId}/comments?page=${_commentPage}`);
+  renderCommentList(data, postId);
+}
+
+function renderCommentList(data, postId) {
+  const list = $('comments-list');
+  if (!list) return;
+  const items = data?.items || [];
+  if (!items.length) {
+    list.innerHTML = '<div style="text-align:center;color:var(--text3);padding:20px;font-size:.85rem">暂无评论，来发表第一条吧~</div>';
+    return;
+  }
+  let html = items.map(c => {
+    const canDelete = state.user && (state.user.role === 'admin' || (c.user && c.user.id === state.user.id));
+    return `<div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
+      <div style="width:36px;height:36px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">👤</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-weight:600;font-size:.9rem">${esc(c.user?.username || '匿名')}</span>
+            ${c.user?.role==='admin'?'<span style="font-size:.7rem;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:3px">管理员</span>':''}
+          </div>
+          <span style="font-size:.75rem;color:var(--text3)">${dt(c.created_at)}</span>
+        </div>
+        <div style="margin-top:6px;font-size:.9rem;line-height:1.5;word-wrap:break-word">${esc(c.content)}</div>
+        ${canDelete ? `<div style="margin-top:6px">
+          <button class="btn btn-ghost btn-icon" style="color:#f87171;font-size:.8rem;padding:2px 8px" onclick="deleteComment(${c.id},${postId})">🗑 删除</button>
+        </div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  if (data.total_pages > 1) {
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:.8rem;color:var(--text3)">
+      <button class="btn btn-secondary" onclick="_commentPage--;loadMoreComments(${postId})" ${_commentPage<=1?'disabled':''}>上一页</button>
+      <span>第 ${data.page} / ${data.total_pages} 页</span>
+      <button class="btn btn-secondary" onclick="_commentPage++;loadMoreComments(${postId})" ${_commentPage>=data.total_pages?'disabled':''}>下一页</button>
+    </div>`;
+  }
+  list.innerHTML = html;
+}
+
+async function loadMoreComments(postId) {
+  const data = await api(`/api/posts/${postId}/comments?page=${_commentPage}`);
+  renderCommentList(data, postId);
+}
+
+async function submitComment(postId) {
+  if (!state.user) { showLogin(); return; }
+  const input = $('comment-input');
+  const content = input?.value.trim();
+  if (!content) { toast('请输入评论内容', 'error'); return; }
+  const r = await api(`/api/posts/${postId}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({ content })
+  });
+  if (r?.id) {
+    toast('✅ 评论成功', 'success');
+    if (input) input.value = '';
+    loadComments(postId);
+  } else {
+    toast(r?.detail || '评论失败', 'error');
+  }
+}
+
+async function deleteComment(commentId, postId) {
+  if (!confirm('确定删除这条评论吗？')) return;
+  const r = await api(`/api/comments/${commentId}`, { method: 'DELETE' });
+  if (r?.ok) {
+    toast('✅ 已删除', 'success');
+    loadComments(postId);
+  } else {
+    toast(r?.detail || '删除失败', 'error');
+  }
+}
 
 // ─── Init ───
 loadQueue();

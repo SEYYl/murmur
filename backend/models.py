@@ -53,11 +53,13 @@ class Post(Base):
     category_id = Column(Integer, ForeignKey("categories.id"))
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     views = Column(Integer, default=0)
+    featured = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     category = relationship("Category", back_populates="posts")
     user = relationship("User", back_populates="posts")
     favorites = relationship("UserFavorite", back_populates="post", cascade="all, delete-orphan")
+    tags = relationship("PostTag", back_populates="post", cascade="all, delete-orphan")
 
 
 class UserFavorite(Base):
@@ -93,6 +95,63 @@ class SystemSetting(Base):
     updated_by = Column(Integer, nullable=True)
 
 
+class Tag(Base):
+    __tablename__ = "tags"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(64), unique=True, nullable=False, index=True)
+    use_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PostTag(Base):
+    __tablename__ = "post_tags"
+    id = Column(Integer, primary_key=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    tag_id = Column(Integer, ForeignKey("tags.id"), nullable=False)
+    post = relationship("Post", back_populates="tags")
+    tag = relationship("Tag")
+    __table_args__ = (UniqueConstraint("post_id", "tag_id", name="uq_post_tag"),)
+
+
+class Playlist(Base):
+    __tablename__ = "playlists"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user = relationship("User", back_populates="playlists")
+    title = Column(String(200), nullable=False)
+    description = Column(Text, default="")
+    cover = Column(String(500), default="")
+    is_public = Column(Boolean, default=False)
+    item_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class PlaylistItem(Base):
+    __tablename__ = "playlist_items"
+    id = Column(Integer, primary_key=True, index=True)
+    playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=False, index=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    position = Column(Integer, default=0)
+    added_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    playlist = relationship("Playlist", back_populates="items")
+    post = relationship("Post")
+
+
+Playlist.items = relationship("PlaylistItem", back_populates="playlist", order_by="PlaylistItem.position", cascade="all, delete-orphan")
+User.playlists = relationship("Playlist", back_populates="user", cascade="all, delete-orphan")
+
+
+class Comment(Base):
+    __tablename__ = "comments"
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user = relationship("User")
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 DEFAULT_SETTINGS = {
     "registration_enabled": "true",
     "max_upload_size_mb": "500",
@@ -105,8 +164,39 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _migrate_db():
+    from sqlalchemy import text, inspect
+    insp = inspect(engine)
+    with engine.connect() as conn:
+        existing_tables = insp.get_table_names()
+        
+        if "posts" in existing_tables:
+            cols = [c["name"] for c in insp.get_columns("posts")]
+            if "featured" not in cols:
+                conn.execute(text("ALTER TABLE posts ADD COLUMN featured BOOLEAN DEFAULT 0"))
+                conn.commit()
+        
+        new_tables = ["tags", "post_tags", "playlists", "playlist_items", "comments"]
+        for t in new_tables:
+            if t not in existing_tables:
+                pass
+        
+        if "playlists" in existing_tables:
+            cols = [c["name"] for c in insp.get_columns("playlists")]
+            if "is_public" not in cols:
+                conn.execute(text("ALTER TABLE playlists ADD COLUMN is_public BOOLEAN DEFAULT 0"))
+                conn.commit()
+            if "item_count" not in cols:
+                conn.execute(text("ALTER TABLE playlists ADD COLUMN item_count INTEGER DEFAULT 0"))
+                conn.commit()
+            if "cover" not in cols:
+                conn.execute(text("ALTER TABLE playlists ADD COLUMN cover VARCHAR(500) DEFAULT ''"))
+                conn.commit()
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _migrate_db()
     session = Session(bind=engine)
     if session.query(Category).count() == 0:
         for name, icon, order in [

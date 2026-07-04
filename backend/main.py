@@ -7,9 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, or_, func
 
-from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, SystemSetting, DEFAULT_SETTINGS, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
+from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, SystemSetting, DEFAULT_SETTINGS, Tag, PostTag, Playlist, PlaylistItem, Comment, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
 from backend.auth import hash_password, verify_password, create_access_token, get_current_user, require_creator, require_admin, get_token
 
 # ─── View count anti-spam ───
@@ -27,18 +27,32 @@ def should_count_view(post_id: int, ip: str) -> bool:
 
 def fmt_post(p, user=None, db=None):
     favorite_count = db.query(UserFavorite).filter(UserFavorite.post_id == p.id).count() if db else 0
+    comment_count = db.query(Comment).filter(Comment.post_id == p.id).count() if db else 0
     is_favorited = False
     if user and db:
         is_favorited = db.query(UserFavorite).filter(
             UserFavorite.post_id == p.id, UserFavorite.user_id == user.id
         ).first() is not None
+    tags = []
+    if db:
+        pt_rows = db.query(Tag).join(PostTag).filter(PostTag.post_id == p.id).order_by(Tag.name).all()
+        tags = [{"id": t.id, "name": t.name, "use_count": t.use_count} for t in pt_rows]
+    author = None
+    if p.user:
+        author = {"id": p.user.id, "username": p.user.username}
     return {
         "id": p.id, "title": p.title,
+        "description": p.description if hasattr(p, 'description') else "",
         "file_type": p.file_type, "duration": p.duration,
         "cover_image": p.cover_image, "views": p.views,
         "favorite_count": favorite_count, "is_favorited": is_favorited,
+        "comment_count": comment_count,
+        "featured": bool(p.featured),
         "created_at": p.created_at.isoformat(),
+        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
         "category": {"id": p.category.id, "name": p.category.name, "icon": p.category.icon} if p.category else None,
+        "tags": tags,
+        "user": author,
     }
 
 
@@ -402,6 +416,15 @@ def list_posts(
             "total_pages": max(1, (total + 19) // 20)}
 
 
+@app.get("/api/posts/featured")
+def featured_posts(limit: int = Query(10, ge=1, le=50),
+                   db: Session = Depends(get_db), user: User = Depends(optional_user)):
+    posts = db.query(Post).filter(Post.featured == True).order_by(
+        desc(Post.created_at)
+    ).limit(limit).all()
+    return {"items": [fmt_post(p, user, db) for p in posts]}
+
+
 @app.get("/api/posts/{post_id}")
 def get_post(post_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(optional_user)):
     p = db.query(Post).filter(Post.id == post_id).first()
@@ -423,6 +446,7 @@ def get_post(post_id: int, request: Request, db: Session = Depends(get_db), user
 @app.post("/api/posts")
 async def create_post(
     title: str = Form(...), description: str = Form(""), category_id: int = Form(...),
+    tags: str = Form(""),
     file: UploadFile = File(...), cover: UploadFile = File(None),
     user: User = Depends(require_creator), db: Session = Depends(get_db)
 ):
@@ -478,6 +502,9 @@ async def create_post(
                 duration=info["duration"], cover_image=cover_url,
                 category_id=category_id, user_id=user.id)
     db.add(post)
+    db.flush()
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    _set_post_tags(db, post.id, tag_list)
     db.commit()
     db.refresh(post)
     return {"id": post.id, "title": post.title, "file_type": post.file_type}
@@ -635,6 +662,7 @@ def get_resume(post_id: int, user: User = Depends(get_current_user), db: Session
 async def update_post(
     post_id: int,
     title: str = Form(None), description: str = Form(None), category_id: int = Form(None),
+    tags: str = Form(None),
     cover: UploadFile = File(None),
     user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
@@ -657,6 +685,9 @@ async def update_post(
         if not cat:
             raise HTTPException(400, "分类不存在")
         p.category_id = category_id
+    if tags is not None:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        _set_post_tags(db, post_id, tag_list)
     if cover and cover.filename:
         ce = os.path.splitext(cover.filename)[1].lower()
         if ce not in ALLOWED_EXTS['image']:
@@ -925,6 +956,301 @@ def get_stats_category_distribution(admin: User = Depends(require_admin), db: Se
             "post_count": post_count, "view_sum": int(view_sum),
         })
     return {"items": items}
+
+
+# ─── Tags (PRD-008) ───
+def _get_or_create_tag(db: Session, name: str) -> Tag:
+    name = name.strip()
+    if not name:
+        return None
+    t = db.query(Tag).filter(Tag.name == name).first()
+    if not t:
+        t = Tag(name=name)
+        db.add(t)
+        db.flush()
+    return t
+
+
+def _set_post_tags(db: Session, post_id: int, tag_names: list):
+    db.query(PostTag).filter(PostTag.post_id == post_id).delete(synchronize_session=False)
+    seen = set()
+    for name in (tag_names or []):
+        n = str(name).strip()
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        t = _get_or_create_tag(db, n)
+        db.add(PostTag(post_id=post_id, tag_id=t.id))
+    # 更新所有涉及标签的 use_count
+    all_tags = db.query(Tag).all()
+    for t in all_tags:
+        t.use_count = db.query(PostTag).filter(PostTag.tag_id == t.id).count()
+    db.flush()
+
+
+@app.get("/api/tags")
+def list_tags(q: str = Query(None), limit: int = Query(30, ge=1, le=100),
+              sort: str = Query("popular"), db: Session = Depends(get_db)):
+    query = db.query(Tag)
+    if q:
+        query = query.filter(Tag.name.ilike(f"%{q}%"))
+    if sort == "popular":
+        query = query.order_by(desc(Tag.use_count), Tag.name)
+    else:
+        query = query.order_by(Tag.name)
+    tags = query.limit(limit).all()
+    return [{"id": t.id, "name": t.name, "use_count": t.use_count} for t in tags]
+
+
+@app.get("/api/tags/{tag_id}/posts")
+def tag_posts(tag_id: int, page: int = Query(1, ge=1), sort: str = Query("latest"),
+              db: Session = Depends(get_db), user: User = Depends(optional_user)):
+    t = db.query(Tag).filter(Tag.id == tag_id).first()
+    if not t:
+        raise HTTPException(404, "标签不存在")
+    q = db.query(Post).join(PostTag).filter(PostTag.tag_id == tag_id)
+    total = q.count()
+    if sort == "popular":
+        q = q.order_by(desc(Post.views))
+    else:
+        q = q.order_by(desc(Post.created_at))
+    posts = q.offset((page - 1) * 24).limit(24).all()
+    return {"tag": {"id": t.id, "name": t.name, "use_count": t.use_count},
+            "items": [fmt_post(p, user, db) for p in posts],
+            "total": total, "page": page, "total_pages": max(1, (total + 23) // 24)}
+
+
+# ─── Playlists (PRD-009) ───
+@app.get("/api/playlists")
+def list_playlists(mine: bool = Query(False), user_id: int = Query(None),
+                   page: int = Query(1, ge=1), db: Session = Depends(get_db),
+                   user: User = Depends(optional_user)):
+    q = db.query(Playlist)
+    if mine and user:
+        q = q.filter(Playlist.user_id == user.id)
+    elif user_id:
+        q = q.filter(Playlist.user_id == user_id, Playlist.is_public == True)
+    else:
+        q = q.filter(Playlist.is_public == True)
+    total = q.count()
+    pls = q.order_by(desc(Playlist.updated_at)).offset((page - 1) * 24).limit(24).all()
+    items = []
+    for pl in pls:
+        items.append({
+            "id": pl.id, "title": pl.title, "description": pl.description,
+            "cover": pl.cover, "is_public": pl.is_public, "item_count": pl.item_count,
+            "created_at": pl.created_at.isoformat(), "updated_at": pl.updated_at.isoformat(),
+            "user": {"id": pl.user.id, "username": pl.user.username} if pl.user else None,
+        })
+    return {"items": items, "total": total, "page": page,
+            "total_pages": max(1, (total + 23) // 24)}
+
+
+@app.post("/api/playlists")
+def create_playlist(data: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    title = (data.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    pl = Playlist(user_id=user.id, title=title,
+                  description=data.get("description", "") or "",
+                  is_public=bool(data.get("is_public", False)))
+    db.add(pl)
+    db.commit()
+    db.refresh(pl)
+    return {"id": pl.id, "title": pl.title, "description": pl.description,
+            "cover": pl.cover, "is_public": pl.is_public, "item_count": 0,
+            "created_at": pl.created_at.isoformat(), "updated_at": pl.updated_at.isoformat()}
+
+
+@app.get("/api/playlists/{pl_id}")
+def get_playlist(pl_id: int, db: Session = Depends(get_db),
+                 user: User = Depends(optional_user)):
+    pl = db.query(Playlist).filter(Playlist.id == pl_id).first()
+    if not pl:
+        raise HTTPException(404, "歌单不存在")
+    if not pl.is_public and (not user or user.id != pl.user_id):
+        raise HTTPException(403, "无权限查看")
+    items = []
+    for pi in pl.items:
+        items.append(fmt_post(pi.post, user, db))
+    return {
+        "id": pl.id, "title": pl.title, "description": pl.description,
+        "cover": pl.cover, "is_public": pl.is_public, "item_count": pl.item_count,
+        "created_at": pl.created_at.isoformat(), "updated_at": pl.updated_at.isoformat(),
+        "user": {"id": pl.user.id, "username": pl.user.username} if pl.user else None,
+        "items": items,
+    }
+
+
+@app.put("/api/playlists/{pl_id}")
+def update_playlist(pl_id: int, data: dict,
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    pl = db.query(Playlist).filter(Playlist.id == pl_id).first()
+    if not pl:
+        raise HTTPException(404, "歌单不存在")
+    if pl.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "无权限修改")
+    if "title" in data and data["title"].strip():
+        pl.title = data["title"].strip()
+    if "description" in data:
+        pl.description = data.get("description", "") or ""
+    if "is_public" in data:
+        pl.is_public = bool(data["is_public"])
+    db.commit()
+    db.refresh(pl)
+    return {"ok": True, "id": pl.id, "title": pl.title, "is_public": pl.is_public}
+
+
+@app.delete("/api/playlists/{pl_id}")
+def delete_playlist(pl_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    pl = db.query(Playlist).filter(Playlist.id == pl_id).first()
+    if not pl:
+        raise HTTPException(404, "歌单不存在")
+    if pl.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "无权限删除")
+    db.delete(pl)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/playlists/{pl_id}/items/{post_id}")
+def add_playlist_item(pl_id: int, post_id: int,
+                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    pl = db.query(Playlist).filter(Playlist.id == pl_id).first()
+    if not pl:
+        raise HTTPException(404, "歌单不存在")
+    if pl.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "无权限")
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(404, "内容不存在")
+    existing = db.query(PlaylistItem).filter(
+        PlaylistItem.playlist_id == pl_id, PlaylistItem.post_id == post_id
+    ).first()
+    if existing:
+        return {"ok": True, "item_count": pl.item_count, "added": False}
+    max_pos = db.query(func.max(PlaylistItem.position)).filter(
+        PlaylistItem.playlist_id == pl_id
+    ).scalar() or 0
+    db.add(PlaylistItem(playlist_id=pl_id, post_id=post_id, position=max_pos + 1))
+    pl.item_count += 1
+    db.commit()
+    return {"ok": True, "item_count": pl.item_count, "added": True}
+
+
+@app.delete("/api/playlists/{pl_id}/items/{post_id}")
+def remove_playlist_item(pl_id: int, post_id: int,
+                         user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    pl = db.query(Playlist).filter(Playlist.id == pl_id).first()
+    if not pl:
+        raise HTTPException(404, "歌单不存在")
+    if pl.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "无权限")
+    item = db.query(PlaylistItem).filter(
+        PlaylistItem.playlist_id == pl_id, PlaylistItem.post_id == post_id
+    ).first()
+    if not item:
+        return {"ok": True, "item_count": pl.item_count}
+    db.delete(item)
+    pl.item_count = max(0, pl.item_count - 1)
+    db.commit()
+    return {"ok": True, "item_count": pl.item_count}
+
+
+# ─── Related / Recommendations (PRD-010) ───
+@app.get("/api/posts/{post_id}/related")
+def related_posts(post_id: int, limit: int = Query(6, ge=1, le=20),
+                  db: Session = Depends(get_db), user: User = Depends(optional_user)):
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(404, "内容不存在")
+    # 基于同分类 + 共现标签的简单推荐
+    tag_ids = [pt.tag_id for pt in db.query(PostTag).filter(PostTag.post_id == post_id).all()]
+    q = db.query(Post).filter(Post.id != post_id)
+    if post.category_id:
+        q = q.filter(Post.category_id == post.category_id)
+    # 优先选标签共现多的
+    if tag_ids:
+        from sqlalchemy import func as _f
+        q = q.outerjoin(PostTag).filter(PostTag.tag_id.in_(tag_ids)).group_by(Post.id)\
+             .order_by(desc(_f.count(PostTag.id)), desc(Post.views))
+    else:
+        q = q.order_by(desc(Post.views))
+    posts = q.limit(limit).all()
+    if len(posts) < limit and post.category_id:
+        # 如果不够，用同分类补
+        have_ids = {p.id for p in posts}
+        fill = db.query(Post).filter(
+            Post.category_id == post.category_id, Post.id != post_id,
+            Post.id.notin_(have_ids)
+        ).order_by(desc(Post.views)).limit(limit - len(posts)).all()
+        posts.extend(fill)
+    return {"items": [fmt_post(p, user, db) for p in posts[:limit]]}
+
+
+# ─── Featured (PRD-011) ───
+@app.put("/api/admin/posts/{post_id}/featured")
+def set_featured(post_id: int, data: dict, admin: User = Depends(require_admin),
+                 db: Session = Depends(get_db)):
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(404, "内容不存在")
+    post.featured = bool(data.get("featured", True))
+    db.commit()
+    return {"ok": True, "featured": post.featured}
+
+
+# ─── Comments (PRD-012) ───
+@app.get("/api/posts/{post_id}/comments")
+def list_comments(post_id: int, page: int = Query(1, ge=1),
+                  db: Session = Depends(get_db)):
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(404, "内容不存在")
+    q = db.query(Comment).filter(Comment.post_id == post_id)
+    total = q.count()
+    comments = q.order_by(desc(Comment.created_at)).offset((page - 1) * 20).limit(20).all()
+    items = []
+    for c in comments:
+        items.append({
+            "id": c.id, "content": c.content,
+            "created_at": c.created_at.isoformat(),
+            "user": {"id": c.user.id, "username": c.user.username} if c.user else None,
+        })
+    return {"items": items, "total": total, "page": page,
+            "total_pages": max(1, (total + 19) // 20)}
+
+
+@app.post("/api/posts/{post_id}/comments")
+def create_comment(post_id: int, data: dict, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(404, "内容不存在")
+    content = (data.get("content") or "").strip()
+    if not content:
+        raise HTTPException(400, "评论内容不能为空")
+    if len(content) > 1000:
+        raise HTTPException(400, "评论不能超过 1000 字")
+    c = Comment(post_id=post_id, user_id=user.id, content=content)
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return {"id": c.id, "content": c.content, "created_at": c.created_at.isoformat(),
+            "user": {"id": user.id, "username": user.username}}
+
+
+@app.delete("/api/comments/{comment_id}")
+def delete_comment(comment_id: int, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    c = db.query(Comment).filter(Comment.id == comment_id).first()
+    if not c:
+        raise HTTPException(404, "评论不存在")
+    if c.user_id != user.id and user.role != "admin":
+        raise HTTPException(403, "无权限删除")
+    db.delete(c)
+    db.commit()
+    return {"ok": True}
 
 
 # ─── Frontend SPA ───
