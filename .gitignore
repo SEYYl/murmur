@@ -12,9 +12,11 @@ uploads/*
 media/audio/*
 media/video/*
 media/covers/*
+media/subtitles/*
 !media/audio/.gitkeep
 !media/video/.gitkeep
 !media/covers/.gitkeep
+!media/subtitles/.gitkeep
 !uploads/.gitkeep
 
 # OS

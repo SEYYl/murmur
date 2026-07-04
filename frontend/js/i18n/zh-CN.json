@@ -1,0 +1,49 @@
+{
+  "nav": {
+    "home": "首页",
+    "discover": "发现",
+    "upload": "上传",
+    "favorites": "收藏",
+    "history": "历史",
+    "playlists": "歌单",
+    "settings": "设置",
+    "admin": "管理",
+    "login": "登录",
+    "register": "注册",
+    "logout": "退出"
+  },
+  "player": {
+    "play": "播放",
+    "pause": "暂停",
+    "forward": "快进",
+    "rewind": "快退",
+    "volume": "音量",
+    "mute": "静音",
+    "speed": "倍速",
+    "fullscreen": "全屏",
+    "subtitles": "字幕"
+  },
+  "common": {
+    "search": "搜索",
+    "loading": "加载中",
+    "no_data": "暂无数据",
+    "confirm": "确认",
+    "cancel": "取消",
+    "save": "保存",
+    "delete": "删除",
+    "edit": "编辑",
+    "publish": "发布",
+    "upload": "上传"
+  },
+  "error": {
+    "login_failed": "登录失败",
+    "upload_failed": "上传失败",
+    "network_error": "网络错误"
+  },
+  "settings": {
+    "theme": "主题",
+    "language": "语言",
+    "change_password": "修改密码",
+    "logout": "退出登录"
+  }
+}
