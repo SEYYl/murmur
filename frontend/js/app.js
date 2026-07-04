@@ -460,7 +460,7 @@ async function renderPost() {
   const hasSubs = p.subtitle_count > 0;
   if (isV) {
     playerHTML = `<div class="video-player-wrap" id="vpw-${pid}" onmousemove="vshow('${pid}')" onclick="vtoggle('${pid}')">
-      <video id="vel-${pid}" src="${esc(src)}" preload="metadata" poster="${esc(cover)}" crossorigin="anonymous"></video>
+      <video id="vel-${pid}" src="${esc(src)}" preload="metadata" poster="${esc(cover)}"></video>
       <div class="video-controls-overlay" id="vov-${pid}">
         <div class="video-center-play" id="vcp-${pid}" onclick="event.stopPropagation();vtoggle('${pid}')">▶</div>
         <div class="video-bottom-bar">
@@ -522,7 +522,7 @@ async function renderPost() {
           </div>
         </div>
       </div>
-      <audio id="ael-${pid}" src="${esc(src)}" preload="metadata" style="display:none" crossorigin="anonymous"></audio>
+      <audio id="ael-${pid}" src="${esc(src)}" preload="metadata" style="display:none"></audio>
     </div>`;
   }
 
@@ -2824,6 +2824,16 @@ document.addEventListener('DOMContentLoaded', () => {
 // ─── Service Worker Registration ───
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      regs.forEach(r => r.update());
+    });
+    navigator.serviceWorker.register('/static/sw.js').then(reg => {
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (nw) nw.addEventListener('statechange', () => {
+          if (nw.state === 'activated') navigator.serviceWorker.controller && location.reload();
+        });
+      });
+    }).catch(() => {});
   });
 }

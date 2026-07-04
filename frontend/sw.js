@@ -1,5 +1,5 @@
 // ─── Murmur Service Worker ───
-const SW_CACHE = 'murmur-v1';
+const SW_CACHE = 'murmur-v2';
 const APP_SHELL = [
   '/',
   '/static/index.html',
@@ -40,8 +40,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cover images under /media/
-  if (url.pathname.startsWith('/media/')) {
+  // Only cache cover images under /media/covers/, skip audio/video (Range requests)
+  if (url.pathname.startsWith('/media/covers/')) {
     event.respondWith(
       caches.open(SW_CACHE).then((cache) => {
         return cache.match(req).then((cached) => {
@@ -55,6 +55,11 @@ self.addEventListener('fetch', (event) => {
         });
       })
     );
+    return;
+  }
+
+  // Skip audio/video files (they use Range requests that SW can't cache)
+  if (url.pathname.startsWith('/media/audio/') || url.pathname.startsWith('/media/video/')) {
     return;
   }
 

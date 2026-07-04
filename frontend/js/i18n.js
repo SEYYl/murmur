@@ -10,7 +10,7 @@ function getBrowserLang() {
 
 async function loadLang(lang) {
   try {
-    const r = await fetch(`${API}/static/js/i18n/${lang}.json`);
+    const r = await fetch(`/static/js/i18n/${lang}.json`);
     if (r.ok) {
       translations = await r.json();
       currentLang = lang;
