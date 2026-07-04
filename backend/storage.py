@@ -348,38 +348,67 @@ def _build_s3_endpoint(provider: str, region: str, endpoint: str) -> str:
     return endpoint or ""
 
 
+def _s3_env(key: str, default: str = "") -> str:
+    """Get an S3 config from env var, or fall back to the empty string.
+
+    Environment variables take precedence over database settings so that
+    Render / Fly.io users can configure R2 without a persistent Disk.
+    """
+    env_map = {
+        "s3_region": "MURMUR_S3_REGION",
+        "s3_bucket": "MURMUR_S3_BUCKET",
+        "s3_access_key": "MURMUR_S3_ACCESS_KEY",
+        "s3_secret_key": "MURMUR_S3_SECRET_KEY",
+        "s3_endpoint": "MURMUR_S3_ENDPOINT",
+        "storage_backend": "MURMUR_STORAGE_BACKEND",
+        "storage_provider": "MURMUR_STORAGE_PROVIDER",
+    }
+    env_name = env_map.get(key)
+    if env_name:
+        val = os.environ.get(env_name)
+        if val:
+            return val
+    return default
+
+
 def get_storage(db=None) -> StorageBackend:
     """Return the configured storage backend instance (cached).
 
     Reads storage_backend and storage_provider from system settings.
     Falls back to LocalStorage if S3 is requested but boto3 is not installed
     or configuration is incomplete.
+
+    *Environment variables take precedence over database settings.*
+    This lets Render free-tier users skip the paid Disk — just set
+    MURMUR_S3_BUCKET, MURMUR_S3_ACCESS_KEY, etc. in the Render dashboard.
     """
     global _storage_instance, _storage_cache_key
 
     from backend.main import get_setting  # local import to avoid cycle
 
-    backend_name = (get_setting("storage_backend", "local", db=db) or "local").lower()
-    provider = (get_setting("storage_provider", "custom", db=db) or "custom").lower()
+    _raw = _s3_env("storage_backend") or get_setting("storage_backend", "local", db=db)
+    backend_name = (_raw or "local").lower()
+    _raw = _s3_env("storage_provider") or get_setting("storage_provider", "custom", db=db)
+    provider = (_raw or "custom").lower()
 
     # Cache key includes both backend and provider (and relevant S3 config) so
     # that changing settings causes a fresh instance on next call.
     cache_key = f"{backend_name}:{provider}"
     if backend_name == "s3":
         # Include enough config to detect meaningful changes.
-        region = get_setting("s3_region", "", db=db)
-        bucket = get_setting("s3_bucket", "", db=db)
+        region = _s3_env("s3_region") or get_setting("s3_region", "", db=db)
+        bucket = _s3_env("s3_bucket") or get_setting("s3_bucket", "", db=db)
         cache_key = f"{backend_name}:{provider}:{region}:{bucket}"
 
     if _storage_instance is not None and _storage_cache_key == cache_key:
         return _storage_instance
 
     if backend_name == "s3":
-        endpoint = get_setting("s3_endpoint", "", db=db)
-        bucket = get_setting("s3_bucket", "", db=db)
-        access_key = get_setting("s3_access_key", "", db=db)
-        secret_key = get_setting("s3_secret_key", "", db=db)
-        region = get_setting("s3_region", "", db=db)
+        endpoint = _s3_env("s3_endpoint") or get_setting("s3_endpoint", "", db=db)
+        bucket = _s3_env("s3_bucket") or get_setting("s3_bucket", "", db=db)
+        access_key = _s3_env("s3_access_key") or get_setting("s3_access_key", "", db=db)
+        secret_key = _s3_env("s3_secret_key") or get_setting("s3_secret_key", "", db=db)
+        region = _s3_env("s3_region") or get_setting("s3_region", "", db=db)
         if not bucket:
             # Misconfigured; fall back to local
             _storage_instance = LocalStorage()
