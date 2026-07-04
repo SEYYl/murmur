@@ -2002,6 +2002,7 @@ async function renderAdminSettings() {
           <select id="set-storage_provider" class="form-select" onchange="updateStorageProviderHint()">
             <option value="aws" ${s.storage_provider==='aws'?'selected':''}>AWS S3</option>
             <option value="aliyun" ${s.storage_provider==='aliyun'?'selected':''}>阿里云 OSS</option>
+            <option value="cloudflare" ${s.storage_provider==='cloudflare'?'selected':''}>Cloudflare R2</option>
             <option value="minio" ${s.storage_provider==='minio'?'selected':''}>MinIO</option>
             <option value="custom" ${s.storage_provider==='custom'||!s.storage_provider?'selected':''}>自定义 S3 兼容</option>
           </select></label>
@@ -2063,6 +2064,7 @@ function updateStorageProviderHint() {
   const hintMap = {
     aws: '如 us-east-1, us-west-2, ap-northeast-1',
     aliyun: '如 oss-cn-hangzhou, oss-cn-beijing, oss-cn-shenzhen',
+    cloudflare: '填写 Cloudflare Account ID（在 R2 概览页右上角可复制）',
     minio: 'MinIO 通常不需要 Region，留空即可',
     custom: '服务支持 region 则填写，否则留空',
   };

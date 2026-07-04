@@ -32,6 +32,13 @@ S3_PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
         "region_hint": "例如 oss-cn-hangzhou",
         "path_style": False,
     },
+    "cloudflare": {
+        "label": "Cloudflare R2",
+        "endpoint_tpl": "https://{account_id}.r2.cloudflarestorage.com",
+        "region_required": False,
+        "region_hint": "R2 使用 auto 作为区域，无需手动填写",
+        "path_style": True,
+    },
     "minio": {
         "label": "MinIO",
         "endpoint_tpl": "",  # user provides full endpoint (e.g. http://minio:9000)
@@ -329,11 +336,14 @@ def _build_s3_endpoint(provider: str, region: str, endpoint: str) -> str:
     """Build the S3 endpoint URL based on provider preset.
 
     For aws/aliyun the endpoint is derived from region via the template.
+    For cloudflare R2 the region field doubles as the account ID.
     For minio/custom the user-provided endpoint is used as-is.
     """
     preset = S3_PROVIDER_PRESETS.get(provider, S3_PROVIDER_PRESETS["custom"])
     tpl = preset.get("endpoint_tpl", "")
     if tpl and region:
+        if provider == "cloudflare":
+            return tpl.format(account_id=region)
         return tpl.format(region=region)
     return endpoint or ""
 
@@ -380,13 +390,15 @@ def get_storage(db=None) -> StorageBackend:
         # Determine path style from preset
         preset = S3_PROVIDER_PRESETS.get(provider, S3_PROVIDER_PRESETS["custom"])
         use_path_style = bool(preset.get("path_style", False))
+        # Cloudflare R2 uses "auto" as the boto3 region_name
+        s3_region = "auto" if provider == "cloudflare" else region
         try:
             _storage_instance = S3Storage(
                 endpoint=effective_endpoint,
                 bucket=bucket,
                 access_key=access_key,
                 secret_key=secret_key,
-                region=region,
+                region=s3_region,
                 provider=provider,
                 use_path_style=use_path_style,
             )
