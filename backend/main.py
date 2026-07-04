@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Res
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_
 
-from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
+from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, SystemSetting, DEFAULT_SETTINGS, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
 from backend.auth import hash_password, verify_password, create_access_token, get_current_user, require_creator, require_admin, get_token
 
 # ─── View count anti-spam ───
@@ -55,6 +55,57 @@ def optional_user(request: Request, db: Session = Depends(get_db)):
         return u
     except (JWTError, ValueError, TypeError):
         return None
+
+
+# ─── System Settings Cache (PRD-007) ───
+_settings_cache = None
+_settings_cache_at = 0
+
+
+def get_settings(db: Session = None) -> dict:
+    """读取系统配置（带内存缓存，5 秒过期）"""
+    global _settings_cache, _settings_cache_at
+    import time as _t
+    now = _t.time()
+    if _settings_cache is not None and (now - _settings_cache_at) < 5:
+        return _settings_cache
+    own_session = False
+    if db is None:
+        db = Session(bind=engine)
+        own_session = True
+    try:
+        rows = db.query(SystemSetting).all()
+        result = dict(DEFAULT_SETTINGS)
+        for r in rows:
+            result[r.key] = r.value
+    finally:
+        if own_session:
+            db.close()
+    _settings_cache = result
+    _settings_cache_at = now
+    return result
+
+
+def get_setting(key: str, default=None, db: Session = None) -> str:
+    return get_settings(db).get(key, default)
+
+
+def invalidate_settings_cache():
+    global _settings_cache, _settings_cache_at
+    _settings_cache = None
+    _settings_cache_at = 0
+
+
+def setting_bool(key: str, default=False, db: Session = None) -> bool:
+    v = get_setting(key, "false" if not default else "true", db)
+    return str(v).lower() in ("true", "1", "yes", "on")
+
+
+def setting_int(key: str, default=0, db: Session = None) -> int:
+    try:
+        return int(get_setting(key, str(default), db))
+    except (ValueError, TypeError):
+        return default
 
 
 app = FastAPI(title="ASMR")
@@ -229,6 +280,8 @@ async def serve_cover(filename: str, request: Request):
 
 @app.post("/api/register")
 def register(data: dict, db: Session = Depends(get_db)):
+    if not setting_bool("registration_enabled", default=True, db=db):
+        raise HTTPException(403, "注册已关闭")
     username = data.get("username", "").strip()
     password = data.get("password", "")
     if not username or len(username) < 2:
@@ -237,7 +290,10 @@ def register(data: dict, db: Session = Depends(get_db)):
         raise HTTPException(400, "密码至少4个字符")
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(400, "用户名已存在")
-    user = User(username=username, password_hash=hash_password(password), role="user")
+    default_role = get_setting("default_user_role", "user", db=db)
+    if default_role not in ("user", "creator", "admin"):
+        default_role = "user"
+    user = User(username=username, password_hash=hash_password(password), role=default_role)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -252,10 +308,12 @@ def login(data: dict, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(401, "用户名或密码错误")
+    if user.status == "banned":
+        raise HTTPException(403, "账号已被封禁，请联系管理员")
     user.last_login_at = datetime.now(timezone.utc)
     db.commit()
     token = create_access_token({"sub": user.id})
-    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role, "status": user.status}}
 
 
 @app.get("/api/me")
@@ -377,6 +435,12 @@ async def create_post(
     fname = f"{fid}{ext}"
     save_path = os.path.join(UPLOAD_DIR, fname)
     content = await file.read()
+
+    # PRD-007: 检查上传大小限制
+    max_size_mb = setting_int("max_upload_size_mb", default=500, db=db)
+    if max_size_mb > 0 and len(content) > max_size_mb * 1024 * 1024:
+        raise HTTPException(413, f"文件过大，最大允许 {max_size_mb}MB")
+
     with open(save_path, "wb") as f:
         f.write(content)
 
@@ -616,6 +680,251 @@ async def update_post(
     db.commit()
     db.refresh(p)
     return {"id": p.id, "title": p.title, "ok": True}
+
+
+# ─── System Settings (PRD-007) ───
+@app.get("/api/admin/settings")
+def get_admin_settings(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    rows = db.query(SystemSetting).all()
+    result = dict(DEFAULT_SETTINGS)
+    for r in rows:
+        result[r.key] = r.value
+    # 安全配置只读展示
+    from backend.auth import SECRET_KEY
+    result["_secret_key_is_default"] = "true" if SECRET_KEY == "asmr-secret-key-change-me" else "false"
+    return result
+
+
+@app.put("/api/admin/settings")
+def update_admin_settings(data: dict, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    allowed = set(DEFAULT_SETTINGS.keys())
+    for k, v in data.items():
+        if k not in allowed:
+            continue
+        row = db.query(SystemSetting).filter(SystemSetting.key == k).first()
+        if row:
+            row.value = str(v)
+            row.updated_by = admin.id
+        else:
+            db.add(SystemSetting(key=k, value=str(v), updated_by=admin.id))
+    db.commit()
+    invalidate_settings_cache()
+    return {"ok": True}
+
+
+@app.get("/api/settings/public")
+def get_public_settings(db: Session = Depends(get_db)):
+    """前端公开配置（无需登录）"""
+    return {
+        "site_name": get_setting("site_name", "Murmur", db=db),
+        "site_description": get_setting("site_description", "", db=db),
+        "footer_text": get_setting("footer_text", "", db=db),
+        "registration_enabled": setting_bool("registration_enabled", default=True, db=db),
+    }
+
+
+# ─── User Management (PRD-005) ───
+def _fmt_user(u, db: Session = None):
+    post_count = 0
+    if db:
+        post_count = db.query(Post).filter(Post.user_id == u.id).count()
+    return {
+        "id": u.id,
+        "username": u.username,
+        "role": u.role,
+        "status": u.status,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+        "post_count": post_count,
+    }
+
+
+@app.get("/api/admin/users")
+def list_users(
+    page: int = Query(1, ge=1), search: str = Query(None),
+    role: str = Query(None), status: str = Query(None),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    q = db.query(User)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(User.username.ilike(like))
+    if role:
+        q = q.filter(User.role == role)
+    if status:
+        q = q.filter(User.status == status)
+    total = q.count()
+    users = q.order_by(User.id.desc()).offset((page - 1) * 20).limit(20).all()
+    return {"items": [_fmt_user(u, db) for u in users], "total": total, "page": page,
+            "total_pages": max(1, (total + 19) // 20)}
+
+
+@app.put("/api/admin/users/{user_id}/role")
+def update_user_role(user_id: int, data: dict, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, "用户不存在")
+    new_role = data.get("role")
+    if new_role not in ("admin", "creator", "user"):
+        raise HTTPException(400, "无效的角色")
+    if u.id == admin.id and new_role != "admin":
+        raise HTTPException(400, "不能降级自己")
+    u.role = new_role
+    db.commit()
+    return {"ok": True, "role": u.role}
+
+
+@app.put("/api/admin/users/{user_id}/status")
+def update_user_status(user_id: int, data: dict, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, "用户不存在")
+    new_status = data.get("status")
+    if new_status not in ("active", "banned"):
+        raise HTTPException(400, "无效的状态")
+    if u.id == admin.id and new_status == "banned":
+        raise HTTPException(400, "不能封禁自己")
+    u.status = new_status
+    db.commit()
+    return {"ok": True, "status": u.status}
+
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+def reset_user_password(user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    import secrets as _s
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, "用户不存在")
+    new_pwd = _s.token_urlsafe(8)
+    u.password_hash = hash_password(new_pwd)
+    db.commit()
+    return {"ok": True, "new_password": new_pwd}
+
+
+# ─── Statistics Dashboard (PRD-006) ───
+def _days_ago(days: int):
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) - timedelta(days=days))
+
+
+@app.get("/api/admin/stats")
+def get_admin_stats(range: str = Query("7d"), admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    days_map = {"today": 1, "7d": 7, "30d": 30, "all": 9999}
+    days = days_map.get(range, 7)
+    since = _days_ago(days) if days < 9999 else None
+
+    q_users = db.query(User)
+    q_posts = db.query(Post)
+    if since:
+        q_users = q_users.filter(User.created_at >= since)
+        q_posts = q_posts.filter(Post.created_at >= since)
+    new_users = q_users.count()
+    new_posts = q_posts.count()
+
+    # DAU: 当天有播放心跳的用户数
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    dau = db.query(PlayHistory.user_id).filter(
+        PlayHistory.played_at >= today_start
+    ).distinct().count()
+
+    # 总播放次数 & 总播放时长（粗估，从 PlayHistory 累计）
+    total_views = db.query(Post).count()  # 占位：实际需 PlaySession 表（PRD-021）
+    total_play_time = db.query(PlayHistory).count()  # 占位：心跳条数作为代理指标
+
+    # 总用户数 & 总内容数（不限时间范围）
+    total_users = db.query(User).count()
+    total_posts = db.query(Post).count()
+
+    return {
+        "range": range,
+        "dau": dau,
+        "new_users": new_users,
+        "new_posts": new_posts,
+        "total_views": total_views,
+        "total_play_time": total_play_time,
+        "total_users": total_users,
+        "total_posts": total_posts,
+    }
+
+
+@app.get("/api/admin/stats/timeseries")
+def get_stats_timeseries(
+    metric: str = Query("new_posts"), days: int = Query(30, ge=1, le=365),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    from datetime import timedelta
+    from collections import defaultdict
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=days - 1)
+    buckets = defaultdict(int)
+    if metric == "new_posts":
+        rows = db.query(Post.created_at).filter(Post.created_at >= _days_ago(days)).all()
+        for (ts,) in rows:
+            buckets[ts.date()] += 1
+    elif metric == "new_users":
+        rows = db.query(User.created_at).filter(User.created_at >= _days_ago(days)).all()
+        for (ts,) in rows:
+            buckets[ts.date()] += 1
+    elif metric == "dau":
+        rows = db.query(PlayHistory.user_id, PlayHistory.played_at).filter(
+            PlayHistory.played_at >= _days_ago(days)
+        ).all()
+        seen = defaultdict(set)
+        for uid, ts in rows:
+            seen[ts.date()].add(uid)
+        for d, s in seen.items():
+            buckets[d] = len(s)
+    else:
+        raise HTTPException(400, "不支持的 metric")
+    series = []
+    cur = start
+    while cur <= end:
+        series.append({"date": cur.isoformat(), "value": buckets.get(cur, 0)})
+        cur += timedelta(days=1)
+    return {"metric": metric, "series": series}
+
+
+@app.get("/api/admin/stats/top-posts")
+def get_stats_top_posts(
+    limit: int = Query(10, ge=1, le=50), metric: str = Query("views"),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    q = db.query(Post)
+    if metric == "favorites":
+        from sqlalchemy import func as _f
+        q = q.outerjoin(UserFavorite).group_by(Post.id).order_by(
+            _f.count(UserFavorite.id).desc(), Post.views.desc()
+        )
+    elif metric == "play_time":
+        q = q.order_by(Post.views.desc())  # 占位，PRD-021 后再细化
+    else:
+        q = q.order_by(Post.views.desc())
+    posts = q.limit(limit).all()
+    items = []
+    for p in posts:
+        fav_count = db.query(UserFavorite).filter(UserFavorite.post_id == p.id).count()
+        items.append({
+            "id": p.id, "title": p.title, "views": p.views,
+            "favorite_count": fav_count,
+            "category": {"name": p.category.name, "icon": p.category.icon} if p.category else None,
+        })
+    return {"metric": metric, "items": items}
+
+
+@app.get("/api/admin/stats/category-distribution")
+def get_stats_category_distribution(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    from sqlalchemy import func as _f
+    rows = db.query(
+        Category.id, Category.name, Category.icon,
+        _f.count(Post.id), _f.coalesce(_f.sum(Post.views), 0)
+    ).outerjoin(Post).group_by(Category.id).all()
+    items = []
+    for cid, name, icon, post_count, view_sum in rows:
+        items.append({
+            "id": cid, "name": name, "icon": icon,
+            "post_count": post_count, "view_sum": int(view_sum),
+        })
+    return {"items": items}
 
 
 # ─── Frontend SPA ───

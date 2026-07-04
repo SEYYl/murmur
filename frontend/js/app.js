@@ -180,6 +180,9 @@ function navigate(view, data) {
   else if (view==='post') renderPost();
   else if (view==='settings') renderSettings();
   else if (view==='admin') renderAdmin();
+  else if (view==='admin-dashboard') renderAdminDashboard();
+  else if (view==='admin-users') renderAdminUsers();
+  else if (view==='admin-settings') renderAdminSettings();
   else if (view==='favorites') renderFavorites();
   else if (view==='history') renderHistory();
   else renderHome();
@@ -992,6 +995,16 @@ async function clearAllHistory() {
 // ─── Admin ───
 let _adminCat = null;
 
+function adminTabs(active) {
+  if(!state.user || state.user.role !== 'admin') return '';
+  return `<div class="admin-tabs" style="display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);overflow-x:auto">
+    <button class="admin-tab ${active==='dashboard'?'active':''}" onclick="navigate('admin-dashboard')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='dashboard'?'var(--accent)':'transparent'};color:${active==='dashboard'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">📊 数据看板</button>
+    <button class="admin-tab ${active==='content'?'active':''}" onclick="navigate('admin')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='content'?'var(--accent)':'transparent'};color:${active==='content'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">📦 内容管理</button>
+    <button class="admin-tab ${active==='users'?'active':''}" onclick="navigate('admin-users')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='users'?'var(--accent)':'transparent'};color:${active==='users'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">👥 用户管理</button>
+    <button class="admin-tab ${active==='settings'?'active':''}" onclick="navigate('admin-settings')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid ${active==='settings'?'var(--accent)':'transparent'};color:${active==='settings'?'var(--accent)':'var(--text3)'};cursor:pointer;font-size:.9rem;white-space:nowrap">⚙️ 系统设置</button>
+  </div>`;
+}
+
 async function renderAdmin() {
   if(!state.user){showLogin();return;}
   const isAdmin = state.user.role === 'admin';
@@ -999,10 +1012,11 @@ async function renderAdmin() {
   if(!isAdmin && !isCreator){navigate('home');toast('⛔ 无权限访问','error');return;}
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>📋 内容管理</h1><div class="sub">${isAdmin?'管理所有上传的音频和视频':'管理我上传的内容'}</div></div>`;
-  
+    <div class="page-header"><h1>📋 内容管理</h1><div class="sub">${isAdmin?'管理所有上传的音频和视频':'管理我上传的内容'}</div></div>
+    ${adminTabs('content')}`;
+
   const cats = await api('/api/categories')||[];
-  
+
   if(isAdmin){
     const stats = await api('/api/posts?page_size=1')||{};
     const total = stats.total||0;
@@ -1011,12 +1025,12 @@ async function renderAdmin() {
       ${cats.map(c=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:100px"><div style="font-size:.9rem;font-weight:600">${c.icon} ${c.name}</div><div style="font-size:.75rem;color:var(--text3)">${c.post_count} 个</div></div>`).join('')}
     </div>`;
   }
-  
+
   con.innerHTML += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
     <button class="btn ${!_adminCat?'btn-primary':'btn-secondary'}" onclick="_adminCat=null;renderAdmin()">🌐 全部</button>
     ${cats.map(c=>`<button class="btn ${_adminCat===c.id?'btn-primary':'btn-secondary'}" onclick="_adminCat=${c.id};renderAdmin()">${c.icon} ${c.name}</button>`).join('')}
   </div>`;
-  
+
   con.innerHTML += `<div id="admin-list"><div class="loading"><div class="spinner"></div></div></div>`;
   
   let url = `/api/posts?page_size=100&sort=latest`;
@@ -1179,6 +1193,265 @@ async function deleteCat(id) {
   const r = await api(`/api/categories/${id}`,{method:'DELETE'});
   if(r?.ok){toast('✅ 分类已删除','success');renderAdmin();}
   else toast(r?.detail||'删除失败','error');
+}
+
+// ─── Admin Dashboard (PRD-006) ───
+let _dashRange = '7d';
+let _dashMetric = 'new_posts';
+let _dashDays = 30;
+
+async function renderAdminDashboard() {
+  if(!state.user || state.user.role !== 'admin'){navigate('home');toast('⛔ 无权限','error');return;}
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header"><h1>📊 数据看板</h1><div class="sub">站点运营数据总览</div></div>
+    ${adminTabs('dashboard')}
+    <div id="dash-kpi"><div class="loading"><div class="spinner"></div></div></div>
+    <div style="margin:24px 0 12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <h2 style="font-size:1rem">📈 趋势</h2>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <select id="dash-metric" onchange="_dashMetric=this.value;loadDashChart()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:6px 10px;color:var(--text);font-size:.85rem">
+          <option value="new_posts">新增内容</option>
+          <option value="new_users">新增用户</option>
+          <option value="dau">DAU</option>
+        </select>
+        <select id="dash-days" onchange="_dashDays=parseInt(this.value);loadDashChart()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:6px 10px;color:var(--text);font-size:.85rem">
+          <option value="7">7天</option>
+          <option value="30" selected>30天</option>
+          <option value="90">90天</option>
+        </select>
+      </div>
+    </div>
+    <div id="dash-chart" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px;min-height:200px"><div class="loading"><div class="spinner"></div></div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px">
+      <div>
+        <h2 style="font-size:1rem;margin-bottom:12px">🏆 热门内容 Top10</h2>
+        <div id="dash-top"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+      <div>
+        <h2 style="font-size:1rem;margin-bottom:12px">🗂 分类分布</h2>
+        <div id="dash-cat"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </div>`;
+  loadDashKpi();
+  loadDashChart();
+  loadDashTop();
+  loadDashCat();
+}
+
+async function loadDashKpi() {
+  const data = await api(`/api/admin/stats?range=${_dashRange}`)||{};
+  const cards = [
+    {label:'DAU',value:data.dau||0,icon:'👥'},
+    {label:'新增用户',value:data.new_users||0,icon:'🆕'},
+    {label:'新增内容',value:data.new_posts||0,icon:'📦'},
+    {label:'总用户',value:data.total_users||0,icon:'👤'},
+    {label:'总内容',value:data.total_posts||0,icon:'📚'},
+    {label:'总播放',value:data.total_views||0,icon:'▶️'},
+  ];
+  $('dash-kpi').innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">${cards.map(c=>`
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px">
+      <div style="font-size:.7rem;color:var(--text3)">${c.icon} ${c.label}</div>
+      <div style="font-size:1.6rem;font-weight:700;margin-top:4px">${c.value}</div>
+    </div>`).join('')}</div>`;
+}
+
+async function loadDashChart() {
+  const m = $('dash-metric'); if(m) m.value = _dashMetric;
+  const d = $('dash-days'); if(d) d.value = String(_dashDays);
+  const el = $('dash-chart');
+  const data = await api(`/api/admin/stats/timeseries?metric=${_dashMetric}&days=${_dashDays}`)||{};
+  const series = data.series||[];
+  if(!series.length){el.innerHTML='<div class="empty"><p>暂无数据</p></div>';return;}
+  const max = Math.max(1, ...series.map(s=>s.value));
+  const w = 100, h = 120;
+  const points = series.map((s,i)=>`${(i/(series.length-1||1))*w},${h-(s.value/max)*h}`).join(' ');
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:160px;display:block">
+    <polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="0.8"/>
+  </svg>
+  <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text3);margin-top:6px">
+    <span>${series[0].date}</span>
+    <span>${series[series.length-1].date}</span>
+  </div>
+  <div style="font-size:.75rem;color:var(--text3);margin-top:8px;text-align:center">峰值 ${max} · 合计 ${series.reduce((a,s)=>a+s.value,0)}</div>`;
+}
+
+async function loadDashTop() {
+  const data = await api('/api/admin/stats/top-posts?metric=views&limit=10')||{};
+  const items = data.items||[];
+  const el = $('dash-top');
+  if(!items.length){el.innerHTML='<div class="empty"><p>暂无内容</p></div>';return;}
+  el.innerHTML = items.map((p,i)=>`
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:6px">
+      <span style="font-weight:700;color:${i<3?'var(--accent)':'var(--text3)'};width:22px">${i+1}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.85rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
+        <div style="font-size:.7rem;color:var(--text3)">${p.category?p.category.icon+' '+esc(p.category.name):''} · 👁${p.views} · ❤️${p.favorite_count}</div>
+      </div>
+    </div>`).join('');
+}
+
+async function loadDashCat() {
+  const data = await api('/api/admin/stats/category-distribution')||{};
+  const items = data.items||[];
+  const el = $('dash-cat');
+  if(!items.length){el.innerHTML='<div class="empty"><p>暂无分类</p></div>';return;}
+  const total = Math.max(1, items.reduce((a,c)=>a+c.post_count,0));
+  el.innerHTML = items.map(c=>`
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:3px">
+        <span>${c.icon} ${esc(c.name)}</span>
+        <span style="color:var(--text3)">${c.post_count} · 👁${c.view_sum}</span>
+      </div>
+      <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden"><div style="background:var(--accent);height:100%;width:${(c.post_count/total)*100}%"></div></div>
+    </div>`).join('');
+}
+
+// ─── Admin Users (PRD-005) ───
+let _userPage = 1;
+let _userFilter = {search:'',role:'',status:''};
+
+async function renderAdminUsers() {
+  if(!state.user || state.user.role !== 'admin'){navigate('home');toast('⛔ 无权限','error');return;}
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header"><h1>👥 用户管理</h1><div class="sub">管理用户角色与状态</div></div>
+    ${adminTabs('users')}
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <input id="user-search" placeholder="🔍 搜索用户名" value="${esc(_userFilter.search)}" onkeyup="if(event.key==='Enter'){_userFilter.search=this.value;_userPage=1;loadUserList()}" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem">
+      <select id="user-role" onchange="_userFilter.role=this.value;_userPage=1;loadUserList()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;color:var(--text);font-size:.85rem">
+        <option value="">全部角色</option>
+        <option value="admin">管理员</option>
+        <option value="creator">创作者</option>
+        <option value="user">普通用户</option>
+      </select>
+      <select id="user-status" onchange="_userFilter.status=this.value;_userPage=1;loadUserList()" style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;color:var(--text);font-size:.85rem">
+        <option value="">全部状态</option>
+        <option value="active">正常</option>
+        <option value="banned">封禁</option>
+      </select>
+    </div>
+    <div id="user-list"><div class="loading"><div class="spinner"></div></div></div>`;
+  if(_userFilter.role) $('user-role').value = _userFilter.role;
+  if(_userFilter.status) $('user-status').value = _userFilter.status;
+  loadUserList();
+}
+
+async function loadUserList() {
+  const params = new URLSearchParams({page:_userPage});
+  if(_userFilter.search) params.set('search', _userFilter.search);
+  if(_userFilter.role) params.set('role', _userFilter.role);
+  if(_userFilter.status) params.set('status', _userFilter.status);
+  const data = await api(`/api/admin/users?${params}`)||{};
+  const el = $('user-list');
+  const users = data.items||[];
+  if(!users.length){el.innerHTML='<div class="empty"><div class="icon">👤</div><p>没有用户</p></div>';return;}
+  el.innerHTML = users.map(u=>`
+    <div style="display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:8px">
+      <div style="width:36px;height:36px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0">${u.role==='admin'?'👑':u.role==='creator'?'🎨':'👤'}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:.9rem">${esc(u.username)} ${u.id===state.user.id?'<span style="font-size:.7rem;color:var(--text3)">（你）</span>':''}</div>
+        <div style="font-size:.7rem;color:var(--text3);margin-top:2px">
+          <span style="color:${u.role==='admin'?'#f59e0b':u.role==='creator'?'#10b981':'var(--text3)'}">${u.role==='admin'?'管理员':u.role==='creator'?'创作者':'普通用户'}</span>
+          · ${u.status==='banned'?'<span style="color:#ef4444">封禁</span>':'正常'}
+          · ${u.post_count} 个内容
+          · ${u.last_login_at?dt(u.last_login_at)+'登录':'未登录'}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <select onchange="changeUserRole(${u.id},this.value)" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:6px 8px;color:var(--text);font-size:.75rem" ${u.id===state.user.id?'disabled':''}>
+          <option value="user" ${u.role==='user'?'selected':''}>普通</option>
+          <option value="creator" ${u.role==='creator'?'selected':''}>创作者</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}>管理员</option>
+        </select>
+        <button class="btn btn-ghost btn-icon" onclick="toggleUserStatus(${u.id},'${u.status}')" title="${u.status==='banned'?'解封':'封禁'}" ${u.id===state.user.id?'disabled':''}>${u.status==='banned'?'🔓':'🚫'}</button>
+        <button class="btn btn-ghost btn-icon" onclick="resetUserPwd(${u.id})" title="重置密码">🔑</button>
+      </div>
+    </div>`).join('') + `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:.8rem;color:var(--text3)">
+      <button class="btn btn-secondary" onclick="_userPage--;loadUserList()" ${_userPage<=1?'disabled':''}>上一页</button>
+      <span>第 ${data.page} / ${data.total_pages} 页 · 共 ${data.total} 用户</span>
+      <button class="btn btn-secondary" onclick="_userPage++;loadUserList()" ${_userPage>=data.total_pages?'disabled':''}>下一页</button>
+    </div>`;
+}
+
+async function changeUserRole(uid, role) {
+  const r = await api(`/api/admin/users/${uid}/role`,{method:'PUT',body:JSON.stringify({role})});
+  if(r?.ok){toast(`✅ 角色已更新为 ${role}`,'success');loadUserList();}
+  else toast(r?.detail||'更新失败','error');
+}
+
+async function toggleUserStatus(uid, cur) {
+  const next = cur==='banned'?'active':'banned';
+  if(!confirm(`确定${next==='banned'?'封禁':'解封'}该用户吗？`)) return;
+  const r = await api(`/api/admin/users/${uid}/status`,{method:'PUT',body:JSON.stringify({status:next})});
+  if(r?.ok){toast(`✅ 已${next==='banned'?'封禁':'解封'}`,'success');loadUserList();}
+  else toast(r?.detail||'操作失败','error');
+}
+
+async function resetUserPwd(uid) {
+  if(!confirm('确定重置该用户密码吗？将生成新密码并返回。')) return;
+  const r = await api(`/api/admin/users/${uid}/reset-password`,{method:'POST'});
+  if(r?.ok){prompt('新密码（请复制并告知用户）：', r.new_password);}
+  else toast(r?.detail||'重置失败','error');
+}
+
+// ─── Admin Settings (PRD-007) ───
+async function renderAdminSettings() {
+  if(!state.user || state.user.role !== 'admin'){navigate('home');toast('⛔ 无权限','error');return;}
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header"><h1>⚙️ 系统设置</h1><div class="sub">站点配置（修改后即时生效）</div></div>
+    ${adminTabs('settings')}
+    <div id="settings-form"><div class="loading"><div class="spinner"></div></div></div>`;
+  const s = await api('/api/admin/settings')||{};
+  $('settings-form').innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:20px;margin-bottom:16px">
+      <h2 style="font-size:.95rem;margin-bottom:14px">🌐 站点信息</h2>
+      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">站点名称</span>
+        <input id="set-site_name" value="${esc(s.site_name||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">站点描述</span>
+        <input id="set-site_description" value="${esc(s.site_description||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+      <label style="display:block"><span style="font-size:.8rem;color:var(--text3)">页脚文字</span>
+        <input id="set-footer_text" value="${esc(s.footer_text||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:20px;margin-bottom:16px">
+      <h2 style="font-size:.95rem;margin-bottom:14px">🔒 注册与权限</h2>
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer">
+        <input type="checkbox" id="set-registration_enabled" ${s.registration_enabled==='true'?'checked':''} style="width:18px;height:18px">
+        <span style="font-size:.85rem">允许新用户注册</span>
+      </label>
+      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">新用户默认角色</span>
+        <select id="set-default_user_role" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px">
+          <option value="user" ${s.default_user_role==='user'?'selected':''}>普通用户（只能浏览播放）</option>
+          <option value="creator" ${s.default_user_role==='creator'?'selected':''}>创作者（可上传内容）</option>
+        </select></label>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:20px;margin-bottom:16px">
+      <h2 style="font-size:.95rem;margin-bottom:14px">📦 上传限制</h2>
+      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">单文件最大上传（MB）</span>
+        <input id="set-max_upload_size_mb" type="number" min="1" max="10240" value="${esc(s.max_upload_size_mb||'500')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+      <div style="background:var(--bg3);border-radius:var(--rs);padding:10px 12px;font-size:.75rem;color:var(--text3)">
+        <div>视频格式: ${esc(s.allowed_video_exts||'')}</div>
+        <div>音频格式: ${esc(s.allowed_audio_exts||'')}</div>
+      </div>
+    </div>
+    ${s._secret_key_is_default==='true'?'<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:var(--rs);padding:12px 16px;margin-bottom:16px;font-size:.8rem;color:#92400e">⚠️ 安全提示：当前使用默认 SECRET_KEY，请通过环境变量 <code>MURMUR_SECRET_KEY</code> 修改后再部署到生产环境</div>':''}
+    <button class="btn btn-primary" onclick="saveSettings()" style="width:100%">💾 保存设置</button>`;
+}
+
+async function saveSettings() {
+  const data = {
+    site_name: $('set-site_name').value,
+    site_description: $('set-site_description').value,
+    footer_text: $('set-footer_text').value,
+    registration_enabled: $('set-registration_enabled').checked?'true':'false',
+    default_user_role: $('set-default_user_role').value,
+    max_upload_size_mb: $('set-max_upload_size_mb').value,
+  };
+  const r = await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(data)});
+  if(r?.ok){toast('✅ 设置已保存','success');renderAdminSettings();}
+  else toast(r?.detail||'保存失败','error');
 }
 
 // ─── Sleep Timer ───

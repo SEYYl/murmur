@@ -85,6 +85,26 @@ class PlayHistory(Base):
     )
 
 
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, default="")
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_by = Column(Integer, nullable=True)
+
+
+DEFAULT_SETTINGS = {
+    "registration_enabled": "true",
+    "max_upload_size_mb": "500",
+    "allowed_video_exts": "mp4,webm,mov,mkv",
+    "allowed_audio_exts": "mp3,wav,flac,m4a,aac,ogg",
+    "site_name": "Murmur",
+    "site_description": "自托管 ASMR 内容平台",
+    "footer_text": "Murmur · Self-hosted ASMR Platform",
+    "default_user_role": "user",
+}
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     session = Session(bind=engine)
@@ -110,6 +130,10 @@ def init_db():
         aid = session.query(User).filter(User.username == "admin").first().id
         session.query(Post).filter(Post.user_id.is_(None)).update({"user_id": aid})
         session.commit()
+    for k, v in DEFAULT_SETTINGS.items():
+        if not session.query(SystemSetting).filter(SystemSetting.key == k).first():
+            session.add(SystemSetting(key=k, value=v))
+    session.commit()
     session.close()
 
 
