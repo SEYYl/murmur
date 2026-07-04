@@ -59,20 +59,49 @@ function setAccent(a) {
 }
 initTheme();
 
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target;
+  if (t && t.getAttribute && t.getAttribute('role') === 'button' && t.tagName !== 'BUTTON') {
+    e.preventDefault();
+    t.click();
+  }
+});
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function dur(s) { if(!s||s<=0) return ''; const m=Math.floor(s/60),s2=Math.floor(s%60); return `${m}:${String(s2).padStart(2,'0')}`; }
-function fs(b) { if(!b) return ''; if(b<1024) return `${b}B`; if(b<1048576) return `${(b/1024).toFixed(0)}KB`; return `${(b/1048576).toFixed(1)}MB`; }
-function dt(d) { if(!d) return ''; const t=new Date(d),n=new Date(),diff=n-t; if(diff<6e4) return '刚刚'; if(diff<36e5) return `${Math.floor(diff/6e4)}分钟前`; if(diff<864e5) return `${Math.floor(diff/36e5)}小时前`; return `${t.getMonth()+1}/${t.getDate()}`; }
-function fdp(s) { if(!s||s<=0) return '0分钟'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); if(h>0) return `${h}小时${m}分钟`; return `${m}分钟`; }
+const _nfBytes = typeof Intl !== 'undefined' && Intl.NumberFormat
+  ? new Intl.NumberFormat(navigator.language || 'zh-CN', { maximumFractionDigits: 1 })
+  : null;
+function fs(b) {
+  if(!b) return '';
+  if(b<1024) return `${b} B`;
+  if(b<1048576) return `${_nfBytes?_nfBytes.format(b/1024):(b/1024).toFixed(0)} KB`;
+  return `${_nfBytes?_nfBytes.format(b/1048576):(b/1048576).toFixed(1)} MB`;
+}
+const _rtf = typeof Intl !== 'undefined' && Intl.RelativeTimeFormat
+  ? new Intl.RelativeTimeFormat(navigator.language || 'zh-CN', { numeric: 'auto' })
+  : null;
+function dt(d) {
+  if(!d) return '';
+  const t=new Date(d),n=new Date(),diff=n-t;
+  if(diff<6e4) return _rtf?_rtf.format(0,'second'):'刚刚';
+  if(diff<36e5) return _rtf?_rtf.format(-Math.floor(diff/6e4),'minute'):`${Math.floor(diff/6e4)}分钟前`;
+  if(diff<864e5) return _rtf?_rtf.format(-Math.floor(diff/36e5),'hour'):`${Math.floor(diff/36e5)}小时前`;
+  if(diff<6048e5 && _rtf) return _rtf.format(-Math.floor(diff/864e5),'day');
+  return `${t.getFullYear()}/${t.getMonth()+1}/${t.getDate()}`;
+}
+function fdp(s) { if(!s||s<=0) return '0 分钟'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); if(h>0) return `${h} 小时 ${m} 分钟`; return `${m} 分钟`; }
 
 let state = { view:'home', postId:null, cat:null, sort:'latest', search:'', page:1, user:null, params:{}, currentSessionId:null };
 let _deferredPrompt = null;
 
 function toast(msg, t='info') {
   const el = document.createElement('div'); el.className = `toast ${t}`;
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
   el.innerHTML = msg; document.body.appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(40px)'; el.style.transition = 'all .3s'; setTimeout(() => el.remove(), 300); }, 3000);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(40px)'; el.style.transition = 'opacity .3s, transform .3s'; setTimeout(() => el.remove(), 300); }, 3000);
 }
 
 function getToken() { return localStorage.getItem(TK); }
@@ -114,8 +143,8 @@ function showLogin() {
     o.innerHTML = `<div class="auth-box">
       <h2>${mode==='login'?'👋 欢迎回来':'✨ 创建账号'}</h2>
       <p class="sub">${mode==='login'?'登录即可播放视频':'注册一个账号开始探索'}</p>
-      <div class="input-group"><label>用户名</label><input id="au" placeholder="输入用户名"></div>
-      <div class="input-group"><label>密码</label><input id="ap" type="password" placeholder="${mode==='login'?'输入密码':'至少4位'}" onkeydown="if(event.key==='Enter') document.querySelector('.auth-primary').click()"></div>
+      <div class="input-group"><label>用户名</label><input id="au" placeholder="输入用户名" autocomplete="username"></div>
+      <div class="input-group"><label>密码</label><input id="ap" type="password" placeholder="${mode==='login'?'输入密码':'至少4位'}" autocomplete="${mode==='login'?'current-password':'new-password'}" onkeydown="if(event.key==='Enter') document.querySelector('.auth-primary').click()"></div>
       <div class="auth-actions">
         <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
         <button class="btn btn-ghost" onclick="mode=mode==='login'?'register':'login';render()">${mode==='login'?'注册':'登录'}</button>
@@ -164,12 +193,12 @@ function updateUI() {
       ${isStaff ? `<button class="btn btn-ghost" onclick="navigate('upload')">📤 上传</button>` : ''}
       ${isStaff ? `<button class="btn btn-ghost" onclick="navigate('admin')">📋 管理</button>` : ''}
       ${installBtn}
-      <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
-      <button class="btn btn-icon btn-ghost" onclick="navigate('settings')" title="设置">⚙️</button>
+      <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}" aria-label="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
+      <button class="btn btn-icon btn-ghost" onclick="navigate('settings')" title="设置" aria-label="设置">⚙️</button>
       <button class="btn btn-ghost" onclick="logout()" style="color:var(--text3)">退出</button>`;
   } else {
     nav.innerHTML = `${installBtn}
-      <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
+      <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}" aria-label="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
       <button class="btn btn-primary" onclick="showLogin()" style="padding:6px 14px;font-size:.8rem">登录</button>`;
   }
 }
@@ -278,18 +307,19 @@ async function loadPosts() {
   for(const p of data.items) {
     const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
     const card = document.createElement('div'); card.className = 'card';
+    card.setAttribute('role', 'button'); card.setAttribute('tabindex', '0');
     card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',p.id); };
     const rp = getResumePos(p.id);
     const isFav = p.is_favorited || false;
     const favCount = p.favorite_count || 0;
     card.innerHTML = `<div class="cover">
-      ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+      ${cv?`<img src="${cv}" alt="${esc(p.title)}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
       <div class="overlay"><div class="play">▶</div></div>
       <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
       ${p.featured?'<div class="badge" style="right:auto;left:8px;top:8px;background:var(--accent)">✨ 精选</div>':''}
       ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
       ${rp?`<div class="resume-badge">▶ ${dur(rp.currentTime)}</div>`:''}
-      <button class="fav-btn-card ${isFav?'active':''}" onclick="event.stopPropagation();toggleCardFavorite(this,${p.id})" title="收藏">
+      <button class="fav-btn-card ${isFav?'active':''}" onclick="event.stopPropagation();toggleCardFavorite(this,${p.id})" title="收藏" aria-label="${isFav?'取消收藏':'收藏'}">
         ${isFav?'❤️':'🤍'}
       </button>
     </div><div class="info">
@@ -297,8 +327,8 @@ async function loadPosts() {
       <div class="meta"><span>👁 ${p.views}</span><span>❤️ ${favCount}</span><span>💬 ${p.comment_count||0}</span></div>
       <div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap">
         ${p.category?`<div class="tag">${p.category.icon} ${esc(p.category.name)}</div>`:''}
-        ${(p.tags||[]).slice(0,3).map(t=>`<div class="tag" style="cursor:pointer" onclick="event.stopPropagation();navigate('tag-posts',{tagId:${t.id}})">#${esc(t.name)}</div>`).join('')}
-        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">＋</button>
+        ${(p.tags||[]).slice(0,3).map(t=>`<button class="tag" style="cursor:pointer" onclick="event.stopPropagation();navigate('tag-posts',{tagId:${t.id}})" aria-label="查看标签 ${esc(t.name)}">#${esc(t.name)}</button>`).join('')}
+        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})" aria-label="添加到播放队列">＋</button>
       </div>
     </div>`;
     grid.appendChild(card);
@@ -463,7 +493,7 @@ async function renderPost() {
       <div class="detail"><div class="info" style="text-align:center;padding:40px 20px">
         <div style="font-size:3rem;margin-bottom:16px">⏳</div>
         <h1 style="margin-bottom:8px">${esc(p.title)}</h1>
-        <p style="color:var(--text3);margin-bottom:20px">转码处理中，请稍后刷新查看...</p>
+        <p style="color:var(--text3);margin-bottom:20px">转码处理中，请稍后刷新查看…</p>
         <button class="btn btn-primary" onclick="renderPost()">🔄 刷新状态</button>
         ${isAdmin?`<button class="btn btn-secondary" onclick="navigate('admin-transcode')">🎬 查看转码队列</button>`:''}
       </div></div>`;
@@ -499,12 +529,12 @@ async function renderPost() {
   let playerHTML = '';
   const hasSubs = p.subtitle_count > 0;
   if (isV) {
-    playerHTML = `<div class="video-player-wrap" id="vpw-${pid}" onmousemove="vshow('${pid}')" onclick="vtoggle('${pid}')">
+    playerHTML = `<div class="video-player-wrap" id="vpw-${pid}" role="button" tabindex="0" onmousemove="vshow('${pid}')" onclick="vtoggle('${pid}')" aria-label="播放/暂停">
       <video id="vel-${pid}" src="${esc(src)}" preload="metadata" poster="${esc(cover)}"></video>
       <div class="video-controls-overlay" id="vov-${pid}">
-        <div class="video-center-play" id="vcp-${pid}" onclick="event.stopPropagation();vtoggle('${pid}')">▶</div>
+        <div class="video-center-play" id="vcp-${pid}" role="button" tabindex="0" onclick="event.stopPropagation();vtoggle('${pid}')" aria-label="播放/暂停">▶</div>
         <div class="video-bottom-bar">
-          <div class="video-progress-wrap" onclick="event.stopPropagation();vseek(event,'${pid}')">
+          <div class="video-progress-wrap" role="slider" tabindex="0" onclick="event.stopPropagation();vseek(event,'${pid}')" aria-label="播放进度">
             <div class="video-progress-fill" id="vpf-${pid}" style="width:0%">
               <div class="video-progress-thumb"></div>
             </div>
@@ -514,25 +544,25 @@ async function renderPost() {
             <span id="vdur-${pid}">0:00</span>
           </div>
           <div class="video-btn-row">
-            <button class="video-play-btn" id="vpb-${pid}" onclick="event.stopPropagation();vtoggle('${pid}')">▶</button>
+            <button class="video-play-btn" id="vpb-${pid}" onclick="event.stopPropagation();vtoggle('${pid}')" aria-label="播放/暂停">▶</button>
             <div class="video-volume-wrap">
-              <button class="video-btn" id="vvb-${pid}" onclick="event.stopPropagation();vmute('${pid}')">🔊</button>
+              <button class="video-btn" id="vvb-${pid}" onclick="event.stopPropagation();vmute('${pid}')" aria-label="静音">🔊</button>
               <input type="range" class="video-volume-slider" id="vvs-${pid}" min="0" max="1" step="0.05" value="1" oninput="event.stopPropagation();vvolume(event,'${pid}')">
             </div>
-            ${hasSubs ? `<button class="video-btn" id="vcc-${pid}" onclick="event.stopPropagation();toggleSubtitle('${pid}',true)" title="字幕">CC</button>` : ''}
-            <span class="timer-indicator" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer;margin-right:2px" onclick="event.stopPropagation();showTimer('${pid}')">⏱ 0:00</span>
-            <button class="video-btn" onclick="event.stopPropagation();showTimer('${pid}')">⏱</button>
-            <button class="video-btn" id="vpm-${pid}" onclick="event.stopPropagation();cyclePlayMode('${pid}')" title="播放模式">🔁</button>
-            <button class="video-btn video-fullscreen-btn" onclick="event.stopPropagation();vfs('${pid}')">⛶</button>
+            ${hasSubs ? `<button class="video-btn" id="vcc-${pid}" onclick="event.stopPropagation();toggleSubtitle('${pid}',true)" title="字幕" aria-label="字幕">CC</button>` : ''}
+            <span class="timer-indicator" role="button" tabindex="0" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer;margin-right:2px" onclick="event.stopPropagation();showTimer('${pid}')" aria-label="定时关闭">⏱ 0:00</span>
+            <button class="video-btn" onclick="event.stopPropagation();showTimer('${pid}')" aria-label="定时关闭">⏱</button>
+            <button class="video-btn" id="vpm-${pid}" onclick="event.stopPropagation();cyclePlayMode('${pid}')" title="播放模式" aria-label="播放模式">🔁</button>
+            <button class="video-btn video-fullscreen-btn" onclick="event.stopPropagation();vfs('${pid}')" aria-label="全屏">⛶</button>
           </div>
         </div>
       </div>
     </div>`;
   } else {
     playerHTML = `<div class="audio-player-card">
-      <div class="audio-visual" onclick="atoggle('${pid}')">
+      <div class="audio-visual" role="button" tabindex="0" onclick="atoggle('${pid}')" aria-label="播放/暂停">
         <div class="audio-play-overlay" id="apo-${pid}">
-          <button class="audio-play-btn-big" id="apb-${pid}">▶</button>
+          <button class="audio-play-btn-big" id="apb-${pid}" aria-label="播放/暂停">▶</button>
         </div>
         <div class="audio-info-overlay">
           <div class="audio-info-title">${esc(p.title)}</div>
@@ -540,7 +570,7 @@ async function renderPost() {
         </div>
       </div>
       <div class="audio-controls">
-        <div class="audio-progress-wrap" onclick="aseek(event,'${pid}')">
+        <div class="audio-progress-wrap" role="slider" tabindex="0" onclick="aseek(event,'${pid}')" aria-label="播放进度">
           <div class="audio-progress-fill" id="apf-${pid}" style="width:0%">
             <div class="audio-progress-thumb"></div>
           </div>
@@ -550,14 +580,14 @@ async function renderPost() {
           <span id="adur-${pid}">${dur(p.duration)}</span>
         </div>
         <div class="audio-btn-row">
-          <button class="audio-play-btn-small" id="aps-${pid}" onclick="event.stopPropagation();atoggle('${pid}')">▶</button>
-          <span id="aspd-${pid}" style="font-size:.75rem;color:var(--text3);cursor:pointer" onclick="aspeed('${pid}')">1x</span>
-          ${hasSubs ? `<button class="audio-btn" id="acc-${pid}" onclick="toggleSubtitle('${pid}',false)" title="字幕">CC</button>` : ''}
-          <span class="timer-indicator" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer" onclick="showTimer('${pid}')">⏱ 0:00</span>
-          <button class="audio-btn" onclick="showTimer('${pid}')">⏱</button>
-          <button class="audio-btn" id="apm-${pid}" onclick="cyclePlayMode('${pid}')" title="播放模式">🔁</button>
+          <button class="audio-play-btn-small" id="aps-${pid}" onclick="event.stopPropagation();atoggle('${pid}')" aria-label="播放/暂停">▶</button>
+          <span id="aspd-${pid}" role="button" tabindex="0" style="font-size:.75rem;color:var(--text3);cursor:pointer" onclick="aspeed('${pid}')" aria-label="播放速度">1x</span>
+          ${hasSubs ? `<button class="audio-btn" id="acc-${pid}" onclick="toggleSubtitle('${pid}',false)" title="字幕" aria-label="字幕">CC</button>` : ''}
+          <span class="timer-indicator" role="button" tabindex="0" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer" onclick="showTimer('${pid}')" aria-label="定时关闭">⏱ 0:00</span>
+          <button class="audio-btn" onclick="showTimer('${pid}')" aria-label="定时关闭">⏱</button>
+          <button class="audio-btn" id="apm-${pid}" onclick="cyclePlayMode('${pid}')" title="播放模式" aria-label="播放模式">🔁</button>
           <div class="audio-volume-wrap">
-            <button class="audio-btn" id="avb-${pid}" onclick="amute('${pid}')">🔊</button>
+            <button class="audio-btn" id="avb-${pid}" onclick="amute('${pid}')" aria-label="静音">🔊</button>
             <input type="range" class="audio-volume-slider" id="avs-${pid}" min="0" max="1" step="0.05" value="1" oninput="avolume(event,'${pid}')">
           </div>
         </div>
@@ -600,7 +630,7 @@ async function renderPost() {
           ${p.user?`<span>👤 ${esc(p.user.username)}</span>`:''}
         </div>
         ${p.tags && p.tags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-          ${p.tags.map(t=>`<span class="tag" style="cursor:pointer" onclick="navigate('tag-posts',{tagId:${t.id}})">#${esc(t.name)}</span>`).join('')}
+          ${p.tags.map(t=>`<button class="tag" style="cursor:pointer" onclick="navigate('tag-posts',{tagId:${t.id}})" aria-label="查看标签 ${esc(t.name)}">#${esc(t.name)}</button>`).join('')}
         </div>` : ''}
         ${p.description?`<div class="desc">${esc(p.description)}</div>`:''}
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
@@ -678,7 +708,7 @@ async function renderPost() {
         <button class="btn btn-secondary" id="resume-cancel">从头开始</button>
         <button class="btn btn-primary" id="resume-btn">▶ 继续播放</button>
       </div>
-      <div class="resume-countdown" id="resume-cd">3 秒后自动播放...</div>
+      <div class="resume-countdown" id="resume-cd">3 秒后自动播放…</div>
     </div>`;
     const playerWrap = isV ? $(`vpw-${pid}`) : qs('.audio-player-card');
     if(playerWrap){
@@ -691,7 +721,7 @@ async function renderPost() {
     const cdEl = $('resume-cd');
     const timer = setInterval(() => {
       count--;
-      if(cdEl) cdEl.textContent = `${count} 秒后自动播放...`;
+      if(cdEl) cdEl.textContent = `${count} 秒后自动播放…`;
       if(count <= 0){
         clearInterval(timer);
         overlay.remove();
@@ -875,7 +905,7 @@ async function renderUpload() {
         <div class="form-group"><label>📝 标题</label><input id="title" placeholder="给你的 ASMR 取个名字..."></div>
         <div class="form-group"><label>📖 描述</label><textarea id="desc" placeholder="简单描述一下这个内容..."></textarea></div>
         <div class="form-group"><label>🏷️ 分类</label>
-          <div class="cat-picker" id="cat-picker">${cats.map(c=>`<div class="cat-option" data-id="${c.id}" onclick="selectCat(${c.id})"><div class="cg-icon">${c.icon}</div>${esc(c.name)}</div>`).join('')}</div>
+          <div class="cat-picker" id="cat-picker">${cats.map(c=>`<div class="cat-option" role="button" tabindex="0" data-id="${c.id}" onclick="selectCat(${c.id})"><div class="cg-icon">${c.icon}</div>${esc(c.name)}</div>`).join('')}</div>
         </div>
         <div class="form-group"><label>🏷️ 标签（逗号分隔）</label>
           <div style="position:relative">
@@ -892,7 +922,7 @@ async function renderUpload() {
           <div id="sp" style="display:none;margin-top:10px;font-size:.85rem;color:var(--text3)"></div></div>
         <div id="upload-progress" style="display:none;margin-bottom:16px">
           <div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text3);margin-bottom:4px">
-            <span id="up-status">上传中...</span><span id="up-percent">0%</span>
+            <span id="up-status">上传中…</span><span id="up-percent">0%</span>
           </div>
           <div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden">
             <div id="up-bar" style="background:var(--accent);height:100%;width:0%;transition:width .2s"></div>
@@ -955,11 +985,11 @@ function submitUpload() {
   const upBar = $('up-bar');
   const upPercent = $('up-percent');
   const upStatus = $('up-status');
-  if(btn){btn.disabled=true;btn.innerHTML='⏳ 上传中...'}
+  if(btn){btn.disabled=true;btn.innerHTML='⏳ 上传中…'}
   if(up){up.style.display='block';}
   if(upBar) upBar.style.width='0%';
   if(upPercent) upPercent.textContent='0%';
-  if(upStatus) upStatus.textContent='上传中...';
+  if(upStatus) upStatus.textContent='上传中…';
   let lastUpdate = 0;
   const maxRetries = 3;
   let retryCount = 0;
@@ -1004,7 +1034,7 @@ function submitUpload() {
   function handleError(r) {
     if (retryCount < maxRetries) {
       retryCount++;
-      if(upStatus) upStatus.textContent = `上传失败，重试中 (${retryCount}/${maxRetries})...`;
+      if(upStatus) upStatus.textContent = `上传失败，重试中 (${retryCount}/${maxRetries})…`;
       setTimeout(doUpload, 1000);
     } else {
       resetBtn();
@@ -1055,7 +1085,7 @@ async function renderEdit() {
         <div class="form-group"><label>📝 标题</label><input id="etitle" value="${esc(p.title)}" placeholder="给你的 ASMR 取个名字..."></div>
         <div class="form-group"><label>📖 描述</label><textarea id="edesc" placeholder="简单描述一下这个内容...">${esc(p.description||'')}</textarea></div>
         <div class="form-group"><label>🏷️ 分类</label>
-          <div class="cat-picker" id="ecat-picker">${cats.map(c=>`<div class="cat-option ${_selCat===c.id?'selected':''}" data-id="${c.id}" onclick="selectEditCat(${c.id})"><div class="cg-icon">${c.icon}</div>${esc(c.name)}</div>`).join('')}</div>
+          <div class="cat-picker" id="ecat-picker">${cats.map(c=>`<div class="cat-option ${_selCat===c.id?'selected':''}" role="button" tabindex="0" data-id="${c.id}" onclick="selectEditCat(${c.id})"><div class="cg-icon">${c.icon}</div>${esc(c.name)}</div>`).join('')}</div>
         </div>
         <div class="form-group"><label>🏷️ 标签（逗号分隔）</label>
           <div style="position:relative">
@@ -1115,7 +1145,7 @@ async function loadSubtitles(pid) {
   list.innerHTML = subs.map(s => `
     <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg3);border-radius:6px;margin-bottom:4px">
       <span style="font-size:.85rem">💬 ${esc(s.language || '字幕')} · ${esc(s.filename || '')}</span>
-      <button class="btn btn-ghost btn-icon" style="margin-left:auto;color:#f87171" onclick="deleteSubtitle(${s.id},${pid})" title="删除">🗑</button>
+      <button class="btn btn-ghost btn-icon" style="margin-left:auto;color:#f87171" onclick="deleteSubtitle(${s.id},${pid})" title="删除" aria-label="删除字幕">🗑</button>
     </div>
   `).join('');
 }
@@ -1148,7 +1178,7 @@ async function genCoverFrame(pid) {
   const t = parseFloat($('cover-time')?.value);
   if(isNaN(t) || t < 0) { toast('请输入有效的时间点（秒）', 'error'); return; }
   const btn = event?.target;
-  if(btn){btn.disabled=true;btn.textContent='⏳ 生成中...'}
+  if(btn){btn.disabled=true;btn.textContent='⏳ 生成中…'}
   const r = await api(`/api/posts/${pid}/cover-frame?time=${t}`, { method:'POST' });
   if(btn){btn.disabled=false;btn.textContent='🎬 生成封面'}
   if(r?.ok) {
@@ -1176,7 +1206,7 @@ async function submitEdit(id) {
   fd.append('category_id', _selCat);
   if (tagList.length) fd.append('tags', JSON.stringify(tagList));
   if(_editCover) fd.append('cover', _editCover);
-  const btn = qs('.btn-primary'); if(btn){btn.disabled=true;btn.innerHTML='⏳ 保存中...'}
+  const btn = qs('.btn-primary'); if(btn){btn.disabled=true;btn.innerHTML='⏳ 保存中…'}
   const r = await api(`/api/posts/${id}`, { method:'PUT', body:fd });
   if(btn){btn.disabled=false;btn.innerHTML='💾 保存修改'}
   if(r?.ok) { toast('✅ 保存成功！', 'success'); navigate('post', id); }
@@ -1194,9 +1224,9 @@ function renderSettings() {
       <div class="form-group"><label>用户名</label><input value="${esc(state.user.username)}" disabled style="opacity:.6"></div>
       <hr class="settings-divider">
       <h2>🔑 修改密码</h2>
-      <div class="form-group"><label>原密码</label><input type="password" id="op" placeholder="输入当前密码"></div>
-      <div class="form-group"><label>新密码</label><input type="password" id="np" placeholder="输入新密码（至少4位）"></div>
-      <div class="form-group"><label>确认新密码</label><input type="password" id="cp2" placeholder="再次输入新密码"></div>
+      <div class="form-group"><label>原密码</label><input type="password" id="op" placeholder="输入当前密码" autocomplete="current-password"></div>
+      <div class="form-group"><label>新密码</label><input type="password" id="np" placeholder="输入新密码（至少4位）" autocomplete="new-password"></div>
+      <div class="form-group"><label>确认新密码</label><input type="password" id="cp2" placeholder="再次输入新密码" autocomplete="new-password"></div>
       <div class="form-actions" style="border:none;padding:0;margin-top:8px"><button class="btn btn-primary" onclick="changePw()">💾 保存修改</button></div>
       <hr class="settings-divider">
       <h2>🎨 主题设置</h2>
@@ -1291,21 +1321,22 @@ async function loadFavPosts() {
     const post = p.post || p;
     const isV = post.file_type==='video', cv = post.cover_image?`${API}/${post.cover_image}`:'';
     const card = document.createElement('div'); card.className = 'card';
+    card.setAttribute('role', 'button'); card.setAttribute('tabindex', '0');
     card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',post.id); };
     const isFav = true;
     const favCount = post.favorite_count || 0;
     card.innerHTML = `<div class="cover">
-      ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+      ${cv?`<img src="${cv}" alt="${esc(post.title)}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
       <div class="overlay"><div class="play">▶</div></div>
       <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
       ${post.duration>0?`<div class="dur">${dur(post.duration)}</div>`:''}
-      <button class="fav-btn-card active" onclick="event.stopPropagation();toggleCardFavorite(this,${post.id})" title="取消收藏">❤️</button>
+      <button class="fav-btn-card active" onclick="event.stopPropagation();toggleCardFavorite(this,${post.id})" title="取消收藏" aria-label="取消收藏">❤️</button>
     </div><div class="info">
       <h3>${esc(post.title)}</h3>
       <div class="meta"><span>👁 ${post.views}</span><span>❤️ ${favCount}</span></div>
       <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
         ${post.category?`<div class="tag">${post.category.icon} ${esc(post.category.name)}</div>`:''}
-        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${post.id},title:'${esc(post.title)}',file_type:'${post.file_type}',duration:${post.duration||0}})">＋</button>
+        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${post.id},title:'${esc(post.title)}',file_type:'${post.file_type}',duration:${post.duration||0}})" aria-label="添加到播放队列">＋</button>
       </div>
     </div>`;
     grid.appendChild(card);
@@ -1354,9 +1385,9 @@ async function loadHistory() {
     const pos = h.position || 0;
     const dur2 = h.duration || post.duration || 0;
     const pct = dur2 > 0 ? Math.min(100, (pos/dur2)*100) : 0;
-    html += `<div style="display:flex;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px;cursor:pointer" onclick="playFromHistory(${post.id})">
+    html += `<div role="button" tabindex="0" style="display:flex;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px;cursor:pointer" onclick="playFromHistory(${post.id})">
       <div style="width:160px;height:90px;border-radius:8px;overflow:hidden;background:var(--bg3);flex-shrink:0;position:relative">
-        ${cv?`<img src="${cv}" style="width:100%;height:100%;object-fit:cover">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2rem;opacity:.3">${isV?'🎬':'🎵'}</div>`}
+        ${cv?`<img src="${cv}" alt="${esc(post.title)}" style="width:100%;height:100%;object-fit:cover">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2rem;opacity:.3">${isV?'🎬':'🎵'}</div>`}
         <div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(0,0,0,.3)">
           <div style="height:100%;background:var(--accent);width:${pct}%"></div>
         </div>
@@ -1370,7 +1401,7 @@ async function loadHistory() {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="font-size:.75rem;color:var(--text3)">${dt(h.played_at)}</div>
-          <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="event.stopPropagation();deleteHistoryItem(${h.id})" title="删除">🗑</button>
+          <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="event.stopPropagation();deleteHistoryItem(${h.id})" title="删除" aria-label="删除历史记录">🗑</button>
         </div>
       </div>
     </div>`;
@@ -1639,7 +1670,7 @@ async function renderAdminDashboard() {
     <div class="admin-hero">
       <h1>📊 数据看板</h1>
       <div class="sub">站点运营数据总览 · 实时掌握平台动态</div>
-      <div class="hero-stats" id="hero-stats"><span>载入中...</span></div>
+      <div class="hero-stats" id="hero-stats"><span>载入中…</span></div>
     </div>
     ${adminTabs('dashboard')}
     <div id="dash-kpi"><div class="loading"><div class="spinner"></div></div></div>
@@ -1876,8 +1907,8 @@ async function loadUserList() {
           <option value="creator" ${u.role==='creator'?'selected':''}>创作者</option>
           <option value="admin" ${u.role==='admin'?'selected':''}>管理员</option>
         </select>
-        <button class="btn btn-secondary" onclick="toggleUserStatus(${u.id},'${u.status}')" title="${u.status==='banned'?'解封':'封禁'}" ${u.id===state.user.id?'disabled':''} style="padding:6px 10px;font-size:.8rem">${u.status==='banned'?'🔓':'🚫'}</button>
-        <button class="btn btn-secondary" onclick="resetUserPwd(${u.id})" title="重置密码" style="padding:6px 10px;font-size:.8rem">🔑</button>
+        <button class="btn btn-secondary" onclick="toggleUserStatus(${u.id},'${u.status}')" title="${u.status==='banned'?'解封':'封禁'}" aria-label="${u.status==='banned'?'解封用户':'封禁用户'}" ${u.id===state.user.id?'disabled':''} style="padding:6px 10px;font-size:.8rem">${u.status==='banned'?'🔓':'🚫'}</button>
+        <button class="btn btn-secondary" onclick="resetUserPwd(${u.id})" title="重置密码" aria-label="重置密码" style="padding:6px 10px;font-size:.8rem">🔑</button>
       </div>
     </div>`;
   }).join('') + `
@@ -1977,7 +2008,7 @@ async function renderAdminSettings() {
         <label class="form-label"><span>Access Key</span>
           <input id="set-s3_access_key" class="form-input" value="${esc(s.s3_access_key||'')}"></label>
         <label class="form-label"><span>Secret Key</span>
-          <input id="set-s3_secret_key" class="form-input" type="password" value="${esc(s.s3_secret_key||'')}"></label>
+          <input id="set-s3_secret_key" class="form-input" type="password" value="${esc(s.s3_secret_key||'')}" autocomplete="off"></label>
         <div style="display:flex;gap:8px;margin-bottom:12px">
           <button type="button" class="btn btn-secondary" onclick="testStorageConnection()" style="flex:1">🔌 测试连接</button>
           <button type="button" class="btn btn-secondary" onclick="migrateStorage()" style="flex:1">⬆️ 迁移本地文件到 S3</button>
@@ -2033,7 +2064,7 @@ function updateStorageProviderHint() {
 
 async function testStorageConnection() {
   const box = $('storage-test-result');
-  if(box) box.textContent = '⏳ 正在测试...';
+  if(box) box.textContent = '⏳ 正在测试…';
   const r = await api('/api/admin/storage/test', {method:'POST'});
   if(!box) return;
   if(r?.ok){
@@ -2068,12 +2099,12 @@ function showTimer(id) {
     <div class="sub">播放结束后自动停止</div>
     ${_timer.active ? `<div style="margin-bottom:16px;text-align:center"><span class="timer-active-label">⏱ 剩余 ${dur(_timer.remaining)}</span></div>` : ''}
     <div class="timer-grid">
-      <div class="timer-opt" onclick="setTimer('${id}',900);$('tp-bg').remove()">15分钟</div>
-      <div class="timer-opt" onclick="setTimer('${id}',1800);$('tp-bg').remove()">30分钟</div>
-      <div class="timer-opt" onclick="setTimer('${id}',2700);$('tp-bg').remove()">45分钟</div>
-      <div class="timer-opt" onclick="setTimer('${id}',3600);$('tp-bg').remove()">60分钟</div>
-      <div class="timer-opt" onclick="setTimer('${id}',0);$('tp-bg').remove()">播完为止</div>
-      <div class="timer-opt" onclick="setTimer('${id}',-1);$('tp-bg').remove()">取消</div>
+      <div class="timer-opt" role="button" tabindex="0" onclick="setTimer('${id}',900);$('tp-bg').remove()">15分钟</div>
+      <div class="timer-opt" role="button" tabindex="0" onclick="setTimer('${id}',1800);$('tp-bg').remove()">30分钟</div>
+      <div class="timer-opt" role="button" tabindex="0" onclick="setTimer('${id}',2700);$('tp-bg').remove()">45分钟</div>
+      <div class="timer-opt" role="button" tabindex="0" onclick="setTimer('${id}',3600);$('tp-bg').remove()">60分钟</div>
+      <div class="timer-opt" role="button" tabindex="0" onclick="setTimer('${id}',0);$('tp-bg').remove()">播完为止</div>
+      <div class="timer-opt" role="button" tabindex="0" onclick="setTimer('${id}',-1);$('tp-bg').remove()">取消</div>
     </div>
   </div>`;
   document.body.appendChild(bg);
@@ -2166,7 +2197,7 @@ function updateQueueBar() {
   const bar = $('queue-bar');
   if (!bar) return;
   bar.innerHTML = _playQueue.length
-    ? _playQueue.map(q => `<div class="queue-item" onclick="rmFromQ(${q.id})">${q.file_type==='video'?'🎬':'🎵'} ${esc(q.title)}</div>`).join('')
+    ? _playQueue.map(q => `<div class="queue-item" role="button" tabindex="0" onclick="rmFromQ(${q.id})" aria-label="从队列移除 ${esc(q.title)}">${q.file_type==='video'?'🎬':'🎵'} ${esc(q.title)}</div>`).join('')
     : '<span style="color:var(--text3);font-size:.75rem">队列为空</span>';
   if (state.postId) {
     const active = bar.querySelector(`[onclick*="${state.postId}"]`);
@@ -2245,18 +2276,19 @@ async function loadTagPosts(tagId) {
   for(const p of items) {
     const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
     const card = document.createElement('div'); card.className = 'card';
+    card.setAttribute('role', 'button'); card.setAttribute('tabindex', '0');
     card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',p.id); };
     const rp = getResumePos(p.id);
     const isFav = p.is_favorited || false;
     const favCount = p.favorite_count || 0;
     card.innerHTML = `<div class="cover">
-      ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+      ${cv?`<img src="${cv}" alt="${esc(p.title)}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
       <div class="overlay"><div class="play">▶</div></div>
       <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
       ${p.featured?'<div class="badge" style="right:auto;left:8px;top:8px;background:var(--accent)">✨ 精选</div>':''}
       ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
       ${rp?`<div class="resume-badge">▶ ${dur(rp.currentTime)}</div>`:''}
-      <button class="fav-btn-card ${isFav?'active':''}" onclick="event.stopPropagation();toggleCardFavorite(this,${p.id})" title="收藏">
+      <button class="fav-btn-card ${isFav?'active':''}" onclick="event.stopPropagation();toggleCardFavorite(this,${p.id})" title="收藏" aria-label="${isFav?'取消收藏':'收藏'}">
         ${isFav?'❤️':'🤍'}
       </button>
     </div><div class="info">
@@ -2264,8 +2296,8 @@ async function loadTagPosts(tagId) {
       <div class="meta"><span>👁 ${p.views}</span><span>❤️ ${favCount}</span><span>💬 ${p.comment_count||0}</span></div>
       <div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap">
         ${p.category?`<div class="tag">${p.category.icon} ${esc(p.category.name)}</div>`:''}
-        ${(p.tags||[]).slice(0,3).map(t=>`<div class="tag" style="cursor:pointer" onclick="event.stopPropagation();navigate('tag-posts',{tagId:${t.id}})">#${esc(t.name)}</div>`).join('')}
-        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">＋</button>
+        ${(p.tags||[]).slice(0,3).map(t=>`<button class="tag" style="cursor:pointer" onclick="event.stopPropagation();navigate('tag-posts',{tagId:${t.id}})" aria-label="查看标签 ${esc(t.name)}">#${esc(t.name)}</button>`).join('')}
+        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})" aria-label="添加到播放队列">＋</button>
       </div>
     </div>`;
     grid.appendChild(card);
@@ -2318,6 +2350,8 @@ async function loadPlaylistList() {
     const card = document.createElement('div');
     card.className = 'card';
     card.style.cursor = 'pointer';
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
     card.onclick = () => navigate('playlist-detail', { playlistId: pl.id });
     const isMine = pl.user && state.user && pl.user.id === state.user.id;
     card.innerHTML = `<div class="cover" style="aspect-ratio:1;background:var(--bg2);display:flex;align-items:center;justify-content:center">
@@ -2332,8 +2366,8 @@ async function loadPlaylistList() {
       </div>
       ${pl.description?`<div style="font-size:.8rem;color:var(--text3);margin-top:4px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(pl.description)}</div>`:''}
       ${isMine ? `<div style="display:flex;gap:6px;margin-top:8px">
-        <button class="btn btn-ghost btn-icon" onclick="event.stopPropagation();editPlaylist(${pl.id},'${esc(pl.title)}','${esc(pl.description||'')}',${pl.is_public})" title="编辑">✏️</button>
-        <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="event.stopPropagation();deletePlaylist(${pl.id})" title="删除">🗑</button>
+        <button class="btn btn-ghost btn-icon" onclick="event.stopPropagation();editPlaylist(${pl.id},'${esc(pl.title)}','${esc(pl.description||'')}',${pl.is_public})" title="编辑" aria-label="编辑歌单">✏️</button>
+        <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="event.stopPropagation();deletePlaylist(${pl.id})" title="删除" aria-label="删除歌单">🗑</button>
       </div>` : ''}
     </div>`;
     grid.appendChild(card);
@@ -2480,10 +2514,10 @@ async function renderPlaylistDetail() {
         if (!post) return;
         const isV = post.file_type === 'video';
         const cv = post.cover_image ? `${API}/${post.cover_image}` : '';
-        html += `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px;cursor:pointer" onclick="navigate('post',${post.id})">
+        html += `<div role="button" tabindex="0" style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px;cursor:pointer" onclick="navigate('post',${post.id})" aria-label="查看 ${esc(post.title)}">
           <div style="width:40px;text-align:center;color:var(--text3);font-size:.9rem;flex-shrink:0">${idx + 1}</div>
           <div style="width:120px;height:68px;border-radius:8px;overflow:hidden;background:var(--bg3);flex-shrink:0;position:relative">
-            ${cv?`<img src="${cv}" style="width:100%;height:100%;object-fit:cover">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;opacity:.3">${isV?'🎬':'🎵'}</div>`}
+            ${cv?`<img src="${cv}" alt="${esc(post.title)}" style="width:100%;height:100%;object-fit:cover">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;opacity:.3">${isV?'🎬':'🎵'}</div>`}
           </div>
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(post.title)}</div>
@@ -2491,7 +2525,7 @@ async function renderPlaylistDetail() {
               ${post.category?post.category.icon + ' ' + esc(post.category.name) + ' · ':''}${dur(post.duration)}
             </div>
           </div>
-          ${isMine?`<button class="btn btn-ghost btn-icon" style="color:#f87171;flex-shrink:0" onclick="event.stopPropagation();removeFromPlaylist(${plId},${post.id})" title="从歌单移除">✕</button>`:''}
+          ${isMine?`<button class="btn btn-ghost btn-icon" style="color:#f87171;flex-shrink:0" onclick="event.stopPropagation();removeFromPlaylist(${plId},${post.id})" title="从歌单移除" aria-label="从歌单移除">✕</button>`:''}
         </div>`;
       });
       html += '</div>';
@@ -2555,7 +2589,7 @@ async function loadMyPlaylistsForAdd(postId) {
     return;
   }
   list.innerHTML = items.map(pl => `
-    <div style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--border);cursor:pointer" onclick="addToPlaylist(${pl.id},${postId})">
+    <div role="button" tabindex="0" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--border);cursor:pointer" onclick="addToPlaylist(${pl.id},${postId})" aria-label="添加到歌单 ${esc(pl.title)}">
       <span style="font-size:1.5rem">🎵</span>
       <div style="flex:1">
         <div style="font-weight:500;font-size:.9rem">${esc(pl.title)}</div>
@@ -2592,9 +2626,9 @@ async function loadRelated(postId) {
   section.style.display = 'block';
   scroll.innerHTML = items.map(p => {
     const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
-    return `<div class="card" style="width:200px;flex-shrink:0;cursor:pointer" onclick="navigate('post',${p.id})">
+    return `<div class="card" style="width:200px;flex-shrink:0;cursor:pointer" role="button" tabindex="0" onclick="navigate('post',${p.id})">
       <div class="cover">
-        ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+        ${cv?`<img src="${cv}" alt="${esc(p.title)}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
         <div class="overlay"><div class="play">▶</div></div>
         <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
         ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
@@ -2617,9 +2651,9 @@ async function loadFeatured() {
   section.style.display = 'block';
   scroll.innerHTML = items.map(p => {
     const isV = p.file_type==='video', cv = p.cover_image?`${API}/${p.cover_image}`:'';
-    return `<div class="card" style="width:220px;flex-shrink:0;cursor:pointer" onclick="if(${isV}&&!state.user){showLogin();return;} navigate('post',${p.id})">
+    return `<div class="card" style="width:220px;flex-shrink:0;cursor:pointer" role="button" tabindex="0" onclick="if(${isV}&&!state.user){showLogin();return;} navigate('post',${p.id})">
       <div class="cover">
-        ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+        ${cv?`<img src="${cv}" alt="${esc(p.title)}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
         <div class="overlay"><div class="play">▶</div></div>
         <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
         <div class="badge" style="right:auto;left:8px;top:8px;background:var(--accent)">✨ 精选</div>
@@ -2683,7 +2717,7 @@ async function submitReport(targetType, targetId) {
   const reason = $('report-reason')?.value.trim();
   if (!reason) { toast('请输入举报理由', 'error'); return; }
   const btn = qs('.report-modal .btn-primary');
-  if (btn) { btn.disabled = true; btn.textContent = '提交中...'; }
+  if (btn) { btn.disabled = true; btn.textContent = '提交中…'; }
   const r = await api('/api/reports', {
     method: 'POST',
     body: JSON.stringify({ target_type: targetType, target_id: targetId, reason })
