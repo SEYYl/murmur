@@ -152,6 +152,15 @@ class Comment(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class Subtitle(Base):
+    __tablename__ = "subtitles"
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
+    language = Column(String(10), default="zh")
+    file_path = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 DEFAULT_SETTINGS = {
     "registration_enabled": "true",
     "max_upload_size_mb": "500",
@@ -161,6 +170,7 @@ DEFAULT_SETTINGS = {
     "site_description": "自托管 ASMR 内容平台",
     "footer_text": "Murmur · Self-hosted ASMR Platform",
     "default_user_role": "user",
+    "rss_enabled": "true",
 }
 
 
@@ -197,6 +207,11 @@ def _migrate_db():
 def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_db()
+    # Ensure media subdirectories exist
+    os.makedirs(os.path.join(MEDIA_DIR, "audio"), exist_ok=True)
+    os.makedirs(os.path.join(MEDIA_DIR, "video"), exist_ok=True)
+    os.makedirs(os.path.join(MEDIA_DIR, "covers"), exist_ok=True)
+    os.makedirs(os.path.join(MEDIA_DIR, "subtitles"), exist_ok=True)
     session = Session(bind=engine)
     if session.query(Category).count() == 0:
         for name, icon, order in [

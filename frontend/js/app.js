@@ -66,6 +66,7 @@ function fs(b) { if(!b) return ''; if(b<1024) return `${b}B`; if(b<1048576) retu
 function dt(d) { if(!d) return ''; const t=new Date(d),n=new Date(),diff=n-t; if(diff<6e4) return '刚刚'; if(diff<36e5) return `${Math.floor(diff/6e4)}分钟前`; if(diff<864e5) return `${Math.floor(diff/36e5)}小时前`; return `${t.getMonth()+1}/${t.getDate()}`; }
 
 let state = { view:'home', postId:null, cat:null, sort:'latest', search:'', page:1, user:null, params:{} };
+let _deferredPrompt = null;
 
 function toast(msg, t='info') {
   const el = document.createElement('div'); el.className = `toast ${t}`;
@@ -154,17 +155,20 @@ function updateUI() {
   const saved = localStorage.getItem(TT);
   const effective = saved || getSystemTheme();
   const isStaff = state.user && (state.user.role === 'admin' || state.user.role === 'creator');
+  const installBtn = `<button class="btn btn-ghost install-btn${_deferredPrompt?' visible':''}" id="install-btn" onclick="promptInstall()" title="安装应用">📲 安装</button>`;
   if (state.user) {
     nav.innerHTML = `<span style="color:var(--text2);font-size:.85rem;font-weight:500">${esc(state.user.username)}</span>
       <button class="btn btn-ghost" onclick="navigate('history')">🕒 历史</button>
       <button class="btn btn-ghost" onclick="navigate('favorites')">❤️ 收藏</button>
       ${isStaff ? `<button class="btn btn-ghost" onclick="navigate('upload')">📤 上传</button>` : ''}
       ${isStaff ? `<button class="btn btn-ghost" onclick="navigate('admin')">📋 管理</button>` : ''}
+      ${installBtn}
       <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
       <button class="btn btn-icon btn-ghost" onclick="navigate('settings')" title="设置">⚙️</button>
       <button class="btn btn-ghost" onclick="logout()" style="color:var(--text3)">退出</button>`;
   } else {
-    nav.innerHTML = `<button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
+    nav.innerHTML = `${installBtn}
+      <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
       <button class="btn btn-primary" onclick="showLogin()" style="padding:6px 14px;font-size:.8rem">登录</button>`;
   }
 }
@@ -172,6 +176,7 @@ function updateUI() {
 
 // ─── Navigation ───
 function navigate(view, data) {
+  closeSidebar();
   state.view = view||'home';
   state.params = {};
   if (typeof data === 'object' && data !== null) {
@@ -302,6 +307,10 @@ async function loadPosts() {
     if(data.page<data.total_pages) pg.innerHTML+=`<button class="btn btn-secondary" onclick="state.page=${data.page+1};loadPosts()">下一页 →</button>`;
     con.appendChild(pg);
   }
+  const rssLink = document.createElement('div');
+  rssLink.style.cssText = 'text-align:center;margin-top:32px;padding-top:20px;border-top:1px solid var(--border)';
+  rssLink.innerHTML = `<a href="${API}/api/rss.xml" target="_blank" style="display:inline-flex;align-items:center;gap:6px;color:var(--text3);text-decoration:none;font-size:.85rem;padding:8px 16px;border-radius:var(--rs);background:var(--bg2);border:1px solid var(--border);transition:all .2s" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text3)'">📡 RSS 订阅</a>`;
+  con.appendChild(rssLink);
 }
 
 // ─── Custom Audio Player ───
@@ -338,11 +347,13 @@ function avolume(e, id) {
   const a = document.getElementById(`ael-${id}`);
   if (!a) return;
   a.volume = parseFloat(e.target.value);
+  localStorage.setItem('asmr_volume', a.volume);
 }
 function amute(id) {
   const a = document.getElementById(`ael-${id}`);
   if (!a) return;
   a.muted = !a.muted;
+  localStorage.setItem('asmr_muted', a.muted ? '1' : '0');
   const btn = document.getElementById(`avb-${id}`);
   if (btn) btn.textContent = a.muted ? '🔇' : '🔊';
 }
@@ -352,6 +363,7 @@ function aspeed(id) {
   const speeds = [1, 1.25, 1.5, 2, 0.5];
   const idx = speeds.indexOf(a.playbackRate);
   a.playbackRate = speeds[(idx + 1) % speeds.length];
+  localStorage.setItem('asmr_speed', a.playbackRate);
   const el = document.getElementById(`aspd-${id}`);
   if (el) el.textContent = `${a.playbackRate}x`;
 }
@@ -392,13 +404,23 @@ function vvolume(e, id) {
   const v = document.getElementById(`vel-${id}`);
   if (!v) return;
   v.volume = parseFloat(e.target.value);
+  localStorage.setItem('asmr_volume', v.volume);
 }
 function vmute(id) {
   const v = document.getElementById(`vel-${id}`);
   if (!v) return;
   v.muted = !v.muted;
+  localStorage.setItem('asmr_muted', v.muted ? '1' : '0');
   const btn = document.getElementById(`vvb-${id}`);
   if (btn) btn.textContent = v.muted ? '🔇' : '🔊';
+}
+function vspeed(id) {
+  const v = document.getElementById(`vel-${id}`);
+  if (!v) return;
+  const speeds = [1, 1.25, 1.5, 2, 0.5];
+  const idx = speeds.indexOf(v.playbackRate);
+  v.playbackRate = speeds[(idx + 1) % speeds.length];
+  localStorage.setItem('asmr_speed', v.playbackRate);
 }
 function vfs(id) {
   const v = document.getElementById(`vel-${id}`);
@@ -435,9 +457,10 @@ async function renderPost() {
   const catText = p.category ? `${p.category.icon} ${esc(p.category.name)}` : '';
 
   let playerHTML = '';
+  const hasSubs = p.subtitle_count > 0;
   if (isV) {
     playerHTML = `<div class="video-player-wrap" id="vpw-${pid}" onmousemove="vshow('${pid}')" onclick="vtoggle('${pid}')">
-      <video id="vel-${pid}" src="${esc(src)}" preload="metadata" poster="${esc(cover)}"></video>
+      <video id="vel-${pid}" src="${esc(src)}" preload="metadata" poster="${esc(cover)}" crossorigin="anonymous"></video>
       <div class="video-controls-overlay" id="vov-${pid}">
         <div class="video-center-play" id="vcp-${pid}" onclick="event.stopPropagation();vtoggle('${pid}')">▶</div>
         <div class="video-bottom-bar">
@@ -456,8 +479,10 @@ async function renderPost() {
               <button class="video-btn" id="vvb-${pid}" onclick="event.stopPropagation();vmute('${pid}')">🔊</button>
               <input type="range" class="video-volume-slider" id="vvs-${pid}" min="0" max="1" step="0.05" value="1" oninput="event.stopPropagation();vvolume(event,'${pid}')">
             </div>
+            ${hasSubs ? `<button class="video-btn" id="vcc-${pid}" onclick="event.stopPropagation();toggleSubtitle('${pid}',true)" title="字幕">CC</button>` : ''}
             <span class="timer-indicator" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer;margin-right:2px" onclick="event.stopPropagation();showTimer('${pid}')">⏱ 0:00</span>
             <button class="video-btn" onclick="event.stopPropagation();showTimer('${pid}')">⏱</button>
+            <button class="video-btn" id="vpm-${pid}" onclick="event.stopPropagation();cyclePlayMode('${pid}')" title="播放模式">🔁</button>
             <button class="video-btn video-fullscreen-btn" onclick="event.stopPropagation();vfs('${pid}')">⛶</button>
           </div>
         </div>
@@ -487,15 +512,17 @@ async function renderPost() {
         <div class="audio-btn-row">
           <button class="audio-play-btn-small" id="aps-${pid}" onclick="event.stopPropagation();atoggle('${pid}')">▶</button>
           <span id="aspd-${pid}" style="font-size:.75rem;color:var(--text3);cursor:pointer" onclick="aspeed('${pid}')">1x</span>
+          ${hasSubs ? `<button class="audio-btn" id="acc-${pid}" onclick="toggleSubtitle('${pid}',false)" title="字幕">CC</button>` : ''}
           <span class="timer-indicator" style="display:none;font-size:.75rem;color:var(--accent);cursor:pointer" onclick="showTimer('${pid}')">⏱ 0:00</span>
           <button class="audio-btn" onclick="showTimer('${pid}')">⏱</button>
+          <button class="audio-btn" id="apm-${pid}" onclick="cyclePlayMode('${pid}')" title="播放模式">🔁</button>
           <div class="audio-volume-wrap">
             <button class="audio-btn" id="avb-${pid}" onclick="amute('${pid}')">🔊</button>
             <input type="range" class="audio-volume-slider" id="avs-${pid}" min="0" max="1" step="0.05" value="1" oninput="avolume(event,'${pid}')">
           </div>
         </div>
       </div>
-      <audio id="ael-${pid}" src="${esc(src)}" preload="metadata" style="display:none"></audio>
+      <audio id="ael-${pid}" src="${esc(src)}" preload="metadata" style="display:none" crossorigin="anonymous"></audio>
     </div>`;
   }
 
@@ -569,6 +596,7 @@ async function renderPost() {
     </div>`;
   con.innerHTML = html;
   updateQueueBar();
+  setupMediaSession(p, cover);
 
   // Bind audio/video events
   let heartbeatTimer = null;
@@ -643,6 +671,7 @@ async function renderPost() {
   if (isV) {
     const v = document.getElementById(`vel-${pid}`);
     if (v) {
+      applySavedMediaSettings(v, pid, true);
       let resumed = false;
       v.addEventListener('timeupdate', () => {
         vupdateUI(pid);
@@ -662,24 +691,28 @@ async function renderPost() {
       v.addEventListener('play', () => {
         vupdateUI(pid);
         startHeartbeat(()=>v.currentTime, ()=>v.duration);
+        updateMediaSessionState(true);
       });
       v.addEventListener('pause', () => {
         vupdateUI(pid);
         stopHeartbeat();
         sendHeartbeat(v.currentTime, v.duration);
+        updateMediaSessionState(false);
       });
       v.addEventListener('ended', () => {
         vupdateUI(pid);
         stopHeartbeat();
         clearPosition(pid);
-        playNext();
+        handlePlaybackEnded(pid, v);
       });
     }
     const vov = document.getElementById(`vov-${pid}`);
     if (vov) { vov.classList.add('visible'); setTimeout(() => { if (v && !v.paused) vov.classList.remove('visible'); }, 3000); }
+    attachVideoGestures(pid);
   } else {
     const a = document.getElementById(`ael-${pid}`);
     if (a) {
+      applySavedMediaSettings(a, pid, false);
       a.addEventListener('timeupdate', () => {
         aupdateUI(pid);
         savePosition(pid, a.currentTime, a.duration);
@@ -698,29 +731,68 @@ async function renderPost() {
       a.addEventListener('play', () => {
         aupdateUI(pid);
         startHeartbeat(()=>a.currentTime, ()=>a.duration);
+        updateMediaSessionState(true);
       });
       a.addEventListener('pause', () => {
         aupdateUI(pid);
         stopHeartbeat();
         sendHeartbeat(a.currentTime, a.duration);
+        updateMediaSessionState(false);
       });
       a.addEventListener('ended', () => {
         aupdateUI(pid);
         stopHeartbeat();
         clearPosition(pid);
-        playNext();
+        handlePlaybackEnded(pid, a);
       });
       const apo = document.getElementById(`apo-${pid}`);
       if (apo) apo.style.display = 'flex';
     }
   }
 
+  if (hasSubs) {
+    loadAndSetupSubtitles(pid, isV);
+  }
   loadRelated(pid);
   loadComments(pid);
 }
+async function loadAndSetupSubtitles(pid, isVideo) {
+  const subs = await api(`/api/posts/${pid}/subtitles`) || [];
+  if (!subs.length) return;
+  const media = document.getElementById(isVideo ? `vel-${pid}` : `ael-${pid}`);
+  if (!media) return;
+  subs.forEach((s, i) => {
+    const track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = s.language || `字幕 ${i+1}`;
+    track.srclang = s.language || 'zh';
+    track.src = `${API}${s.file_path || s.url || ''}`;
+    media.appendChild(track);
+  });
+  const ccBtn = document.getElementById(isVideo ? `vcc-${pid}` : `acc-${pid}`);
+  if (ccBtn) {
+    ccBtn.style.opacity = '0.5';
+    ccBtn.dataset.on = '0';
+  }
+}
+function toggleSubtitle(id, isV) {
+  const m = document.getElementById(isV ? `vel-${id}` : `ael-${id}`);
+  const btn = document.getElementById(isV ? `vcc-${id}` : `acc-${id}`);
+  if (!m) return;
+  const isOn = btn?.dataset.on === '1';
+  const newState = !isOn;
+  for (let i = 0; i < m.textTracks.length; i++) {
+    m.textTracks[i].mode = newState ? 'showing' : 'hidden';
+  }
+  if (btn) {
+    btn.dataset.on = newState ? '1' : '0';
+    btn.style.opacity = newState ? '1' : '0.5';
+    btn.style.color = newState ? 'var(--accent)' : '';
+  }
+}
 
 // ─── Upload ───
-let _file = null, _cover = null, _selCat = null, _tagSuggestions = [];
+let _file = null, _cover = null, _subtitle = null, _selCat = null, _tagSuggestions = [];
 
 async function renderUpload() {
   if(!state.user) { showLogin(); return; }
@@ -747,6 +819,17 @@ async function renderUpload() {
         <div class="form-group"><label>🖼️ 封面（可选）</label><button class="btn btn-secondary" onclick="$('ci').click()">选择封面图片</button>
           <input type="file" id="ci" accept="image/*" onchange="hc(event)" style="display:none">
           <div id="cp" style="display:none;margin-top:10px"><img id="cpi" style="max-width:180px;border-radius:8px;border:1px solid var(--border)"></div></div>
+        <div class="form-group"><label>💬 字幕（可选，.srt/.vtt）</label><button class="btn btn-secondary" onclick="$('si').click()">选择字幕文件</button>
+          <input type="file" id="si" accept=".srt,.vtt" onchange="hs(event)" style="display:none">
+          <div id="sp" style="display:none;margin-top:10px;font-size:.85rem;color:var(--text3)"></div></div>
+        <div id="upload-progress" style="display:none;margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text3);margin-bottom:4px">
+            <span id="up-status">上传中...</span><span id="up-percent">0%</span>
+          </div>
+          <div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden">
+            <div id="up-bar" style="background:var(--accent);height:100%;width:0%;transition:width .2s"></div>
+          </div>
+        </div>
         <div class="form-actions"><button class="btn btn-primary" onclick="submitUpload()">📤 上传</button></div>
       </div>
     </div>`;
@@ -779,8 +862,13 @@ function hc(e) {
   r.onload = e => { $('cp').style.display='block'; $('cpi').src=e.target.result; };
   r.readAsDataURL(f);
 }
+function hs(e) {
+  const f = e.target.files?.[0]; if(!f) return;
+  _subtitle = f;
+  const sp = $('sp'); if(sp){sp.style.display='block';sp.textContent=`📄 ${esc(f.name)} (${fs(f.size)})`;}
+}
 
-async function submitUpload() {
+function submitUpload() {
   const title = $('title')?.value.trim();
   if(!title) { toast('请输入标题', 'error'); return; }
   if(!_file) { toast('请选择文件', 'error'); return; }
@@ -794,14 +882,88 @@ async function submitUpload() {
   if (tagList.length) fd.append('tags', JSON.stringify(tagList));
   fd.append('file', _file);
   if(_cover) fd.append('cover', _cover);
-  const btn = qs('.btn-primary'); if(btn){btn.disabled=true;btn.innerHTML='⏳ 上传中...'}
-  const r = await api('/api/posts', { method:'POST', body:fd });
-  if(btn){btn.disabled=false;btn.innerHTML='📤 上传'}
-  if(r?.id) { toast('✅ 上传成功！', 'success'); navigate('post', r.id); }
-  else toast(r?.detail||'上传失败','error');
+  const btn = qs('.btn-primary');
+  const up = $('upload-progress');
+  const upBar = $('up-bar');
+  const upPercent = $('up-percent');
+  const upStatus = $('up-status');
+  if(btn){btn.disabled=true;btn.innerHTML='⏳ 上传中...'}
+  if(up){up.style.display='block';}
+  if(upBar) upBar.style.width='0%';
+  if(upPercent) upPercent.textContent='0%';
+  if(upStatus) upStatus.textContent='上传中...';
+  let lastUpdate = 0;
+  const maxRetries = 3;
+  let retryCount = 0;
+  function doUpload() {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API}/api/posts`);
+    const token = getToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const now = Date.now();
+      if (now - lastUpdate < 200) return;
+      lastUpdate = now;
+      const pct = Math.round((e.loaded / e.total) * 100);
+      if(upBar) upBar.style.width = `${pct}%`;
+      if(upPercent) upPercent.textContent = `${pct}%`;
+    };
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        localStorage.removeItem(TK); state.user = null; updateUI();
+        toast('⛔ 登录已过期，请重新登录', 'error');
+        if (state.view !== 'home') navigate('home'); showLogin();
+        resetBtn(); return;
+      }
+      let r = null;
+      try { r = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300 && r?.id) {
+        resetBtn();
+        toast('✅ 上传成功！', 'success');
+        if (_subtitle) {
+          uploadSubtitleAfterCreate(r.id);
+        } else {
+          navigate('post', r.id);
+        }
+      } else {
+        handleError(r);
+      }
+    };
+    xhr.onerror = () => handleError(null);
+    xhr.send(fd);
+  }
+  function handleError(r) {
+    if (retryCount < maxRetries) {
+      retryCount++;
+      if(upStatus) upStatus.textContent = `上传失败，重试中 (${retryCount}/${maxRetries})...`;
+      setTimeout(doUpload, 1000);
+    } else {
+      resetBtn();
+      toast(r?.detail || '上传失败', 'error');
+    }
+  }
+  function resetBtn() {
+    if(btn){btn.disabled=false;btn.innerHTML='📤 上传'}
+    if(up){setTimeout(()=>{up.style.display='none';}, 1000);}
+  }
+  function uploadSubtitleAfterCreate(postId) {
+    const sfd = new FormData();
+    sfd.append('file', _subtitle);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API}/api/posts/${postId}/subtitles`);
+    const token = getToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.onload = () => {
+      navigate('post', postId);
+    };
+    xhr.onerror = () => { navigate('post', postId); };
+    xhr.send(sfd);
+  }
+  doUpload();
 }
 
-let _editCover = null;
+let _editCover = null, _editSubtitle = null;
 
 async function renderEdit() {
   if(!state.user){showLogin();return;}
@@ -812,10 +974,12 @@ async function renderEdit() {
   const isOwner = p.user && p.user.id === state.user.id;
   if(!isAdmin && !isOwner){navigate('home');toast('⛔ 无权限编辑','error');return;}
   _editCover = null;
+  _editSubtitle = null;
   _selCat = p.category_id || null;
   const cats = await api('/api/categories')||[];
   const con = $('content');
   const cover = p.cover_image?`${API}/${p.cover_image}`:'';
+  const isV = p.file_type === 'video';
   con.innerHTML = `<button class="back" onclick="navigate('post',${pid})">← 返回</button>
     <div class="page-header"><h1>✏️ 编辑内容</h1><div class="sub">修改内容的标题、描述、分类或封面</div></div>
     <div class="upload-form">
@@ -833,14 +997,27 @@ async function renderEdit() {
           <div style="font-size:.75rem;color:var(--text3);margin-top:4px">多个标签用英文或中文逗号分隔</div>
         </div>
         <div class="form-group"><label>🖼️ 封面（可选，不更换则留空）</label>
-          ${cover?`<div style="margin-bottom:10px"><img src="${cover}" style="max-width:180px;border-radius:8px;border:1px solid var(--border)"></div>`:''}
+          ${cover?`<div style="margin-bottom:10px"><img id="e-cover-img" src="${cover}" style="max-width:180px;border-radius:8px;border:1px solid var(--border)"></div>`:''}
           <button class="btn btn-secondary" onclick="$('eci').click()">${cover?'更换封面':'选择封面图片'}</button>
           <input type="file" id="eci" accept="image/*" onchange="hec(event)" style="display:none">
           <div id="ecp" style="display:none;margin-top:10px"><img id="ecpi" style="max-width:180px;border-radius:8px;border:1px solid var(--border)"></div>
+          ${isV?`<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="cover-time" type="number" min="0" step="0.1" placeholder="时间点（秒）" style="width:120px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:6px 10px;color:var(--text);font-size:.85rem">
+            <button class="btn btn-secondary" onclick="genCoverFrame(${pid})">🎬 生成封面</button>
+          </div>`:''}
+        </div>
+        <div class="form-group"><label>💬 字幕管理</label>
+          <div id="sub-list"><div class="loading"><div class="spinner"></div></div></div>
+          <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-secondary" onclick="$('esi').click()">➕ 上传字幕</button>
+            <input type="file" id="esi" accept=".srt,.vtt" onchange="hes(event)" style="display:none">
+            <span id="esn" style="font-size:.8rem;color:var(--text3)"></span>
+          </div>
         </div>
         <div class="form-actions"><button class="btn btn-primary" onclick="submitEdit(${pid})">💾 保存修改</button></div>
       </div>
     </div>`;
+  loadSubtitles(pid);
 }
 
 function selectEditCat(id) {
@@ -853,6 +1030,70 @@ function hec(e) {
   _editCover = f; const r = new FileReader();
   r.onload = e => { $('ecp').style.display='block'; $('ecpi').src=e.target.result; };
   r.readAsDataURL(f);
+}
+function hes(e) {
+  const f = e.target.files?.[0]; if(!f) return;
+  _editSubtitle = f;
+  const esn = $('esn'); if(esn) esn.textContent = `📄 ${esc(f.name)} (${fs(f.size)})`;
+  uploadEditSubtitle();
+}
+async function loadSubtitles(pid) {
+  const list = $('sub-list'); if(!list) return;
+  const subs = await api(`/api/posts/${pid}/subtitles`) || [];
+  if(!subs.length){
+    list.innerHTML = '<div style="font-size:.85rem;color:var(--text3)">暂无字幕</div>';
+    return;
+  }
+  list.innerHTML = subs.map(s => `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg3);border-radius:6px;margin-bottom:4px">
+      <span style="font-size:.85rem">💬 ${esc(s.language || '字幕')} · ${esc(s.filename || '')}</span>
+      <button class="btn btn-ghost btn-icon" style="margin-left:auto;color:#f87171" onclick="deleteSubtitle(${s.id},${pid})" title="删除">🗑</button>
+    </div>
+  `).join('');
+}
+async function uploadEditSubtitle() {
+  if(!_editSubtitle || !state.postId) return;
+  const pid = state.postId;
+  const fd = new FormData();
+  fd.append('file', _editSubtitle);
+  const r = await api(`/api/posts/${pid}/subtitles`, { method:'POST', body:fd });
+  if(r?.id || r?.ok) {
+    toast('✅ 字幕上传成功', 'success');
+    _editSubtitle = null;
+    const esn = $('esn'); if(esn) esn.textContent = '';
+    loadSubtitles(pid);
+  } else {
+    toast(r?.detail || '上传失败', 'error');
+  }
+}
+async function deleteSubtitle(id, pid) {
+  if(!confirm('确定删除这个字幕吗？')) return;
+  const r = await api(`/api/subtitles/${id}`, { method:'DELETE' });
+  if(r?.ok) {
+    toast('✅ 已删除', 'success');
+    loadSubtitles(pid);
+  } else {
+    toast(r?.detail || '删除失败', 'error');
+  }
+}
+async function genCoverFrame(pid) {
+  const t = parseFloat($('cover-time')?.value);
+  if(isNaN(t) || t < 0) { toast('请输入有效的时间点（秒）', 'error'); return; }
+  const btn = event?.target;
+  if(btn){btn.disabled=true;btn.textContent='⏳ 生成中...'}
+  const r = await api(`/api/posts/${pid}/cover-frame?time=${t}`, { method:'POST' });
+  if(btn){btn.disabled=false;btn.textContent='🎬 生成封面'}
+  if(r?.ok) {
+    toast('✅ 封面已生成', 'success');
+    const img = $('e-cover-img');
+    if(img){
+      const ts = Date.now();
+      const src = img.src.split('?')[0];
+      img.src = `${src}?t=${ts}`;
+    }
+  } else {
+    toast(r?.detail || '生成失败', 'error');
+  }
 }
 
 async function submitEdit(id) {
@@ -907,6 +1148,12 @@ function renderSettings() {
           <button class="btn ${localStorage.getItem(TA)==='warm'?'btn-primary':'btn-secondary'}" onclick="setAccent('warm')" style="border-left:4px solid #f97316">暖橙</button>
         </div>
       </div>
+      <hr class="settings-divider">
+      <h2>📦 数据导出</h2>
+      <div class="form-group">
+        <p style="font-size:.85rem;color:var(--text3);margin:0 0 8px">导出你的所有数据（收藏、历史、歌单等）为 ZIP 文件</p>
+        <button class="btn btn-secondary" onclick="exportMyData()">📦 导出我的数据</button>
+      </div>
     </div>`;
 }
 
@@ -919,6 +1166,19 @@ async function changePw() {
   const r = await api('/api/change-password',{method:'POST',body:JSON.stringify({old_password:op,new_password:np})});
   if(r?.ok){toast('✅ 密码修改成功','success');$('op').value='';$('np').value='';$('cp2').value='';}
   else toast(r?.detail||'修改失败','error');
+}
+
+async function exportMyData() {
+  const token = getToken();
+  const r = await fetch(`${API}/api/me/export`, { headers: { Authorization: `Bearer ${token}` }});
+  if (!r.ok) { toast('导出失败', 'error'); return; }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `murmur-export-${Date.now()}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('✅ 数据已导出', 'success');
 }
 
 let _favCat = null, _favSort = 'time', _favSearch = '', _favPage = 1;
@@ -2223,6 +2483,347 @@ async function deleteComment(commentId, postId) {
   }
 }
 
+// ═══════════════════════════════════════
+// ─── PRD-013 Player Enhancements ───
+// ═══════════════════════════════════════
+const PM_KEY = 'asmr_playmode';
+const PM_VOL = 'asmr_volume';
+const PM_MUTED = 'asmr_muted';
+const PM_SPEED = 'asmr_speed';
+const PM_ORDER = ['list', 'single', 'random'];
+const PM_ICON = { list: '🔁', single: '🔂', random: '🔀' };
+const PM_LABEL = { list: '列表循环', single: '单曲循环', random: '随机播放' };
+
+function getPlayMode() { return localStorage.getItem(PM_KEY) || 'list'; }
+function getPlayModeIcon() { return PM_ICON[getPlayMode()] || '🔁'; }
+
+function cyclePlayMode(pid) {
+  const cur = getPlayMode();
+  const next = PM_ORDER[(PM_ORDER.indexOf(cur) + 1) % PM_ORDER.length];
+  localStorage.setItem(PM_KEY, next);
+  const btn = document.getElementById(`apm-${pid}`) || document.getElementById(`vpm-${pid}`);
+  if (btn) { btn.textContent = PM_ICON[next]; btn.title = PM_LABEL[next]; }
+  toast(`${PM_ICON[next]} ${PM_LABEL[next]}`, 'info');
+}
+
+function applySavedMediaSettings(media, pid, isVideo) {
+  const savedVol = parseFloat(localStorage.getItem(PM_VOL));
+  if (!isNaN(savedVol) && savedVol >= 0 && savedVol <= 1) {
+    media.volume = savedVol;
+    const slider = document.getElementById(isVideo ? `vvs-${pid}` : `avs-${pid}`);
+    if (slider) slider.value = savedVol;
+  }
+  const savedMuted = localStorage.getItem(PM_MUTED) === '1';
+  media.muted = savedMuted;
+  const muteBtn = document.getElementById(isVideo ? `vvb-${pid}` : `avb-${pid}`);
+  if (muteBtn) muteBtn.textContent = savedMuted ? '🔇' : '🔊';
+  const savedSpeed = parseFloat(localStorage.getItem(PM_SPEED));
+  if (!isNaN(savedSpeed) && savedSpeed > 0) {
+    media.playbackRate = savedSpeed;
+    if (!isVideo) {
+      const sp = document.getElementById(`aspd-${pid}`);
+      if (sp) sp.textContent = `${savedSpeed}x`;
+    }
+  }
+  const pmBtn = document.getElementById(isVideo ? `vpm-${pid}` : `apm-${pid}`);
+  if (pmBtn) { pmBtn.textContent = getPlayModeIcon(); pmBtn.title = PM_LABEL[getPlayMode()]; }
+}
+
+function handlePlaybackEnded(pid, media) {
+  const mode = getPlayMode();
+  if (mode === 'single') {
+    media.currentTime = 0;
+    media.play().catch(() => {});
+    return;
+  }
+  if (mode === 'random') {
+    playRandomRelated(pid);
+    return;
+  }
+  playNext();
+}
+
+async function playRandomRelated(pid) {
+  const data = await api(`/api/posts/${pid}/related?limit=10`);
+  const items = data?.items || [];
+  if (!items.length) { playNext(); return; }
+  const pick = items[Math.floor(Math.random() * items.length)];
+  toast(`🔀 随机播放：${pick.title}`, 'info');
+  navigate('post', pick.id);
+}
+
+// ─── Media Session API ───
+function setupMediaSession(p, cover) {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: p.title || 'Murmur',
+      artist: p.user?.username || 'Murmur',
+      album: p.category?.name || 'ASMR',
+      artwork: cover ? [{ src: cover, sizes: '512x512', type: 'image/jpeg' }] : []
+    });
+    navigator.mediaSession.setActionHandler('play', () => {
+      const m = document.querySelector('audio, video'); if (m) m.play();
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      const m = document.querySelector('audio, video'); if (m) m.pause();
+    });
+    navigator.mediaSession.setActionHandler('seekbackward', () => {
+      const m = document.querySelector('audio, video');
+      if (m) m.currentTime = Math.max(0, m.currentTime - 5);
+    });
+    navigator.mediaSession.setActionHandler('seekforward', () => {
+      const m = document.querySelector('audio, video');
+      if (m) m.currentTime = Math.min(m.duration || 0, m.currentTime + 5);
+    });
+  } catch (e) {}
+}
+
+function updateMediaSessionState(playing) {
+  if ('mediaSession' in navigator) {
+    try { navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'; } catch (e) {}
+  }
+}
+
+// ─── Keyboard Shortcuts ───
+function handleKeydown(e) {
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+  if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+    e.preventDefault(); toggleHelpOverlay(); return;
+  }
+  if (e.key === 'Escape') {
+    const help = $('help-overlay');
+    if (help) { help.remove(); return; }
+    return;
+  }
+  const m = document.querySelector('audio, video');
+  if (!m) return;
+  switch (e.key) {
+    case ' ':
+      e.preventDefault();
+      if (m.paused) m.play().catch(() => {}); else m.pause();
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      m.currentTime = Math.max(0, m.currentTime - (e.shiftKey ? 30 : 5));
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      if (m.duration) m.currentTime = Math.min(m.duration, m.currentTime + (e.shiftKey ? 30 : 5));
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      m.volume = Math.min(1, Math.round((m.volume + 0.1) * 100) / 100);
+      localStorage.setItem(PM_VOL, m.volume);
+      if (m.muted) { m.muted = false; localStorage.setItem(PM_MUTED, '0'); updateMuteBtnVisual(m); }
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      m.volume = Math.max(0, Math.round((m.volume - 0.1) * 100) / 100);
+      localStorage.setItem(PM_VOL, m.volume);
+      break;
+    case 'm': case 'M':
+      e.preventDefault();
+      m.muted = !m.muted;
+      localStorage.setItem(PM_MUTED, m.muted ? '1' : '0');
+      updateMuteBtnVisual(m);
+      break;
+    case 'f': case 'F':
+      e.preventDefault();
+      if (m.tagName === 'VIDEO') {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else m.parentElement?.requestFullscreen?.();
+      }
+      break;
+    case '1': case '2': case '3': case '4': case '5': {
+      e.preventDefault();
+      const speeds = [1, 1.25, 1.5, 2, 0.5];
+      const idx = parseInt(e.key) - 1;
+      m.playbackRate = speeds[idx];
+      localStorage.setItem(PM_SPEED, speeds[idx]);
+      const pid = (m.id || '').split('-').slice(1).join('-');
+      const sp = document.getElementById(`aspd-${pid}`);
+      if (sp) sp.textContent = `${speeds[idx]}x`;
+      toast(`倍速 ${speeds[idx]}x`, 'info');
+      break;
+    }
+  }
+}
+
+function updateMuteBtnVisual(m) {
+  const pid = (m.id || '').split('-').slice(1).join('-');
+  const btn = document.getElementById(`avb-${pid}`) || document.getElementById(`vvb-${pid}`);
+  if (btn) btn.textContent = m.muted ? '🔇' : '🔊';
+}
+
+function toggleHelpOverlay() {
+  const existing = $('help-overlay');
+  if (existing) { existing.remove(); return; }
+  const o = document.createElement('div');
+  o.id = 'help-overlay';
+  o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(2px)';
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  const kbd = 'display:inline-block;padding:2px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;font-size:.75rem;font-family:monospace;min-width:24px;text-align:center';
+  const row = 'display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--border)';
+  o.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:24px;max-width:440px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.4)">
+    <h2 style="margin:0 0 16px;font-size:1.1rem">⌨️ 键盘快捷键</h2>
+    <div style="font-size:.85rem">
+      <div style="${row}"><span>播放 / 暂停</span><span style="${kbd}">Space</span></div>
+      <div style="${row}"><span>快退 / 快进 5 秒</span><span><span style="${kbd}">←</span> / <span style="${kbd}">→</span></span></div>
+      <div style="${row}"><span>快退 / 快进 30 秒</span><span><span style="${kbd}">Shift</span> + <span style="${kbd}">←/→</span></span></div>
+      <div style="${row}"><span>音量增 / 减</span><span><span style="${kbd}">↑</span> / <span style="${kbd}">↓</span></span></div>
+      <div style="${row}"><span>静音切换</span><span style="${kbd}">M</span></div>
+      <div style="${row}"><span>全屏（视频）</span><span style="${kbd}">F</span></div>
+      <div style="${row}"><span>切换倍速 1x/1.25x/1.5x/2x/0.5x</span><span style="${kbd}">1~5</span></div>
+      <div style="${row}"><span>显示 / 隐藏此帮助</span><span style="${kbd}">?</span></div>
+      <div style="${row};border-bottom:none"><span>关闭浮层</span><span style="${kbd}">Esc</span></div>
+    </div>
+    <div style="margin-top:16px;text-align:right">
+      <button class="btn btn-secondary" onclick="this.closest('#help-overlay').remove()">关闭</button>
+    </div>
+  </div>`;
+  document.body.appendChild(o);
+}
+
+// ═══════════════════════════════════════
+// ─── PRD-014 Mobile & PWA ───
+// ═══════════════════════════════════════
+
+// ─── Mobile Sidebar Menu ───
+function openSidebar() {
+  const sb = $('sidebar'); const ov = $('sidebar-overlay');
+  if (!sb || !ov) return;
+  sb.classList.add('open');
+  ov.classList.add('visible');
+  document.body.style.overflow = 'hidden';
+}
+function closeSidebar() {
+  const sb = $('sidebar'); const ov = $('sidebar-overlay');
+  if (!sb || !ov) return;
+  sb.classList.remove('open');
+  ov.classList.remove('visible');
+  document.body.style.overflow = '';
+}
+function toggleSidebar() {
+  const sb = $('sidebar');
+  if (!sb) return;
+  if (sb.classList.contains('open')) closeSidebar(); else openSidebar();
+}
+
+// ─── Video Double-Tap Gestures ───
+function attachVideoGestures(pid) {
+  const wrap = document.getElementById(`vpw-${pid}`);
+  if (!wrap || wrap._gestureBound) return;
+  wrap._gestureBound = true;
+  let lastTap = 0;
+  let lastTapZone = null;
+  wrap.addEventListener('touchend', (e) => {
+    if (!e.changedTouches || e.changedTouches.length !== 1) return;
+    const touch = e.changedTouches[0];
+    const rect = wrap.getBoundingClientRect();
+    const x = touch.clientX - rect.left;
+    const zone = x < rect.width / 3 ? 'left' : (x > rect.width * 2 / 3 ? 'right' : 'center');
+    const now = Date.now();
+    const delta = now - lastTap;
+    if (delta < 300 && lastTapZone === zone) {
+      // Double-tap detected
+      e.preventDefault();
+      const v = document.getElementById(`vel-${pid}`);
+      if (v) {
+        if (zone === 'left') {
+          // Undo the first tap's play/pause toggle, then rewind 10s
+          vtoggle(pid);
+          v.currentTime = Math.max(0, v.currentTime - 10);
+          showVideoGestureFeedback(wrap, '⏪', 'left');
+        } else if (zone === 'right') {
+          // Undo the first tap's play/pause toggle, then forward 10s
+          vtoggle(pid);
+          v.currentTime = Math.min(v.duration || 0, v.currentTime + 10);
+          showVideoGestureFeedback(wrap, '⏩', 'right');
+        } else {
+          // Center: first tap already toggled once, which is the expected behavior
+          showVideoGestureFeedback(wrap, '⏯', 'center');
+        }
+      }
+      lastTap = 0;
+      lastTapZone = null;
+    } else {
+      lastTap = now;
+      lastTapZone = zone;
+    }
+  }, { passive: false });
+}
+
+function showVideoGestureFeedback(wrap, icon, zone) {
+  const fb = document.createElement('div');
+  fb.className = `video-gesture-fb ${zone}`;
+  fb.textContent = icon;
+  wrap.appendChild(fb);
+  setTimeout(() => fb.remove(), 600);
+}
+
+// ─── Offline / Online Banner ───
+function showOfflineBanner() {
+  if ($('offline-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'offline-banner';
+  b.className = 'offline-banner visible';
+  b.textContent = '🌐 网络已断开，部分功能不可用';
+  document.body.appendChild(b);
+}
+function hideOfflineBanner() {
+  const b = $('offline-banner');
+  if (b) b.remove();
+}
+
+// ─── PWA Install Prompt ───
+function promptInstall() {
+  if (!_deferredPrompt) return;
+  _deferredPrompt.prompt();
+  _deferredPrompt.userChoice.then(() => {
+    _deferredPrompt = null;
+    const btn = $('install-btn');
+    if (btn) btn.classList.remove('visible');
+    updateUI();
+  }).catch(() => {});
+}
+
 // ─── Init ───
 loadQueue();
-document.addEventListener('DOMContentLoaded', () => { checkAuth(); loadCats(); navigate('home'); });
+document.addEventListener('keydown', handleKeydown);
+document.addEventListener('DOMContentLoaded', () => {
+  // Mobile menu
+  $('menu-toggle')?.addEventListener('click', toggleSidebar);
+  $('sidebar-close')?.addEventListener('click', closeSidebar);
+  $('sidebar-overlay')?.addEventListener('click', closeSidebar);
+
+  // Online / Offline
+  window.addEventListener('online', () => { hideOfflineBanner(); toast('✅ 网络已恢复', 'success'); });
+  window.addEventListener('offline', showOfflineBanner);
+  if (!navigator.onLine) showOfflineBanner();
+
+  // PWA install prompt
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    _deferredPrompt = e;
+    updateUI();
+  });
+  window.addEventListener('appinstalled', () => {
+    _deferredPrompt = null;
+    const btn = $('install-btn');
+    if (btn) btn.classList.remove('visible');
+    toast('✅ 安装成功', 'success');
+  });
+
+  initI18n().then(() => {
+    checkAuth(); loadCats(); navigate('home');
+  });
+});
+
+// ─── Service Worker Registration ───
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  });
+}

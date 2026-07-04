@@ -9,8 +9,10 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
-<link rel="manifest" href="/static/site.webmanifest">
-<link rel="stylesheet" href="/static/css/style.css?v=5">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/static/css/style.css?v=6">
 
 <style>body{background:var(--bg,#0d0d0f);color:var(--text,#e8e8ed);margin:0}</style>
 
@@ -19,13 +21,17 @@
 
 <header>
   <div class="header-inner">
+    <button class="menu-toggle" id="menu-toggle" aria-label="菜单">☰</button>
     <div class="logo" onclick="navigate()">Murmur</div>
     <nav></nav>
   </div>
 </header>
 
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
 <div class="main">
   <aside class="sidebar" id="sidebar">
+    <button class="sidebar-close" id="sidebar-close" aria-label="关闭">✕</button>
     <div class="sidebar-section">
       <h3>📂 分类</h3>
       <div class="cat-list" id="cat-list">
@@ -36,6 +42,7 @@
   <main id="content"><div class="loading"><div class="spinner"></div></div></main>
 </div>
 
-<script src="/static/js/app.js?v=5"></script>
+<script src="/static/js/i18n.js?v=1"></script>
+<script src="/static/js/app.js?v=6"></script>
 </body>
 </html>

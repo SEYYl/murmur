@@ -1,4 +1,4 @@
-import os, uuid, shutil, subprocess, json, time, mimetypes
+import os, uuid, shutil, subprocess, json, time, mimetypes, zipfile, io
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Res
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, func
 
-from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, SystemSetting, DEFAULT_SETTINGS, Tag, PostTag, Playlist, PlaylistItem, Comment, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
+from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, SystemSetting, DEFAULT_SETTINGS, Tag, PostTag, Playlist, PlaylistItem, Comment, Subtitle, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
 from backend.auth import hash_password, verify_password, create_access_token, get_current_user, require_creator, require_admin, get_token
 
 # ─── View count anti-spam ───
@@ -28,6 +28,7 @@ def should_count_view(post_id: int, ip: str) -> bool:
 def fmt_post(p, user=None, db=None):
     favorite_count = db.query(UserFavorite).filter(UserFavorite.post_id == p.id).count() if db else 0
     comment_count = db.query(Comment).filter(Comment.post_id == p.id).count() if db else 0
+    subtitle_count = db.query(Subtitle).filter(Subtitle.post_id == p.id).count() if db else 0
     is_favorited = False
     if user and db:
         is_favorited = db.query(UserFavorite).filter(
@@ -47,6 +48,7 @@ def fmt_post(p, user=None, db=None):
         "cover_image": p.cover_image, "views": p.views,
         "favorite_count": favorite_count, "is_favorited": is_favorited,
         "comment_count": comment_count,
+        "subtitle_count": subtitle_count,
         "featured": bool(p.featured),
         "created_at": p.created_at.isoformat(),
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
@@ -128,7 +130,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-for d in ["audio", "video", "covers"]:
+for d in ["audio", "video", "covers", "subtitles"]:
     os.makedirs(os.path.join(MEDIA_DIR, d), exist_ok=True)
 
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
@@ -288,6 +290,15 @@ async def serve_cover(filename: str, request: Request):
         raise HTTPException(404)
     ct, _ = mimetypes.guess_type(file_path)
     return stream_file(file_path, request, ct or "image/jpeg")
+
+
+@app.get("/media/subtitles/{filename}")
+async def serve_subtitle(filename: str, request: Request):
+    file_path = os.path.join(MEDIA_DIR, "subtitles", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(404)
+    ct, _ = mimetypes.guess_type(file_path)
+    return stream_file(file_path, request, ct or "text/plain")
 
 
 # ─── Auth ───
@@ -1251,6 +1262,247 @@ def delete_comment(comment_id: int, user: User = Depends(get_current_user),
     db.delete(c)
     db.commit()
     return {"ok": True}
+
+
+# ─── Subtitles (PRD-015) ───
+@app.post("/api/posts/{post_id}/subtitles")
+async def upload_subtitle(
+    post_id: int,
+    language: str = Form("zh"),
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    if user.role != "admin" and p.user_id != user.id:
+        raise HTTPException(403, "无权限操作此内容")
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".srt", ".vtt"):
+        raise HTTPException(400, "仅支持 .srt 或 .vtt 字幕文件")
+    fid = uuid.uuid4().hex
+    fname = f"{fid}{ext}"
+    sub_path = os.path.join(MEDIA_DIR, "subtitles", fname)
+    content = await file.read()
+    with open(sub_path, "wb") as f:
+        f.write(content)
+    sub = Subtitle(post_id=post_id, language=language.strip() or "zh",
+                   file_path=f"media/subtitles/{fname}")
+    db.add(sub)
+    db.commit()
+    db.refresh(sub)
+    return {"id": sub.id, "post_id": sub.post_id, "language": sub.language,
+            "file_path": sub.file_path, "created_at": sub.created_at.isoformat()}
+
+
+@app.get("/api/posts/{post_id}/subtitles")
+def list_subtitles(post_id: int, db: Session = Depends(get_db)):
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    subs = db.query(Subtitle).filter(Subtitle.post_id == post_id).order_by(
+        desc(Subtitle.created_at)
+    ).all()
+    return {"items": [{
+        "id": s.id, "post_id": s.post_id, "language": s.language,
+        "file_path": s.file_path, "created_at": s.created_at.isoformat(),
+    } for s in subs]}
+
+
+@app.delete("/api/subtitles/{subtitle_id}")
+def delete_subtitle(subtitle_id: int, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    sub = db.query(Subtitle).filter(Subtitle.id == subtitle_id).first()
+    if not sub:
+        raise HTTPException(404, "字幕不存在")
+    post = db.query(Post).filter(Post.id == sub.post_id).first()
+    if not post:
+        raise HTTPException(404, "内容不存在")
+    if user.role != "admin" and post.user_id != user.id:
+        raise HTTPException(403, "无权限删除此字幕")
+    abs_path = os.path.join(MEDIA_DIR, "subtitles", os.path.basename(sub.file_path))
+    if os.path.exists(abs_path):
+        try:
+            os.remove(abs_path)
+        except:
+            pass
+    db.delete(sub)
+    db.commit()
+    return {"ok": True}
+
+
+# ─── Cover Frame (PRD-015) ───
+@app.post("/api/posts/{post_id}/cover-frame")
+def set_cover_frame(
+    post_id: int, time: float = Query(0, ge=0),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    if user.role != "admin" and p.user_id != user.id:
+        raise HTTPException(403, "无权限操作此内容")
+    if p.file_type != "video":
+        raise HTTPException(400, "仅视频内容支持选帧封面")
+    t = time
+    video_rel = p.file_path
+    # file_path 形如 "media/video/xxx.mp4"
+    abs_video = os.path.join(MEDIA_DIR, *video_rel.split("/")[1:]) if video_rel.startswith("media/") else os.path.join(MEDIA_DIR, video_rel)
+    if not os.path.exists(abs_video):
+        raise HTTPException(404, "视频文件不存在")
+    fid = uuid.uuid4().hex
+    cf = f"{fid}_frame.jpg"
+    cover_path = os.path.join(MEDIA_DIR, "covers", cf)
+    if not gen_thumb(abs_video, cover_path, t):
+        raise HTTPException(500, "封面截取失败")
+    old_cover = p.cover_image
+    p.cover_image = f"media/covers/{cf}"
+    p.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    if old_cover:
+        cp = os.path.join(MEDIA_DIR, "covers", os.path.basename(old_cover))
+        if os.path.exists(cp):
+            try:
+                os.remove(cp)
+            except:
+                pass
+    return {"ok": True, "cover_image": p.cover_image}
+
+
+# ─── Data Export (PRD-017) ───
+@app.get("/api/me/export")
+def export_my_data(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    base_url = ""
+    # Posts
+    posts = db.query(Post).filter(Post.user_id == user.id).order_by(desc(Post.created_at)).all()
+    posts_data = []
+    for p in posts:
+        posts_data.append({
+            "id": p.id, "title": p.title, "description": p.description,
+            "file_type": p.file_type, "file_path": p.file_path,
+            "duration": p.duration, "views": p.views,
+            "cover_image": p.cover_image,
+            "category": {"id": p.category.id, "name": p.category.name} if p.category else None,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        })
+    # Favorites
+    fav_posts = db.query(Post).join(UserFavorite, UserFavorite.post_id == Post.id).filter(
+        UserFavorite.user_id == user.id
+    ).order_by(desc(UserFavorite.created_at)).all()
+    favorites_data = []
+    for p in fav_posts:
+        favorites_data.append({
+            "id": p.id, "title": p.title, "file_type": p.file_type,
+            "cover_image": p.cover_image,
+            "category": {"id": p.category.id, "name": p.category.name} if p.category else None,
+        })
+    # Playlists (with items)
+    pls = db.query(Playlist).filter(Playlist.user_id == user.id).order_by(
+        desc(Playlist.created_at)
+    ).all()
+    playlists_data = []
+    for pl in pls:
+        items = []
+        for pi in pl.items:
+            items.append({
+                "post_id": pi.post_id, "title": pi.post.title if pi.post else None,
+                "position": pi.position, "added_at": pi.added_at.isoformat() if pi.added_at else None,
+            })
+        playlists_data.append({
+            "id": pl.id, "title": pl.title, "description": pl.description,
+            "is_public": pl.is_public, "item_count": pl.item_count,
+            "created_at": pl.created_at.isoformat() if pl.created_at else None,
+            "items": items,
+        })
+    # History
+    history_rows = db.query(PlayHistory, Post).join(Post, PlayHistory.post_id == Post.id).filter(
+        PlayHistory.user_id == user.id
+    ).order_by(desc(PlayHistory.played_at)).all()
+    history_data = []
+    for h, p in history_rows:
+        history_data.append({
+            "post_id": p.id, "title": p.title, "position": h.position,
+            "duration": h.duration, "played_at": h.played_at.isoformat() if h.played_at else None,
+        })
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("posts.json", json.dumps(posts_data, ensure_ascii=False, indent=2))
+        zf.writestr("favorites.json", json.dumps(favorites_data, ensure_ascii=False, indent=2))
+        zf.writestr("playlists.json", json.dumps(playlists_data, ensure_ascii=False, indent=2))
+        zf.writestr("history.json", json.dumps(history_data, ensure_ascii=False, indent=2))
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="murmur-export-{user.id}.zip"'}
+    )
+
+
+# ─── RSS Feed (PRD-017) ───
+_rss_cache = {"xml": None, "category_id": None, "at": 0}
+
+
+@app.get("/api/rss.xml")
+def rss_feed(request: Request, category_id: int = Query(None), db: Session = Depends(get_db)):
+    if not setting_bool("rss_enabled", default=True, db=db):
+        raise HTTPException(404, "RSS 已关闭")
+    # 5 分钟内存缓存
+    now = time.time()
+    if (_rss_cache["xml"] is not None
+            and _rss_cache["category_id"] == category_id
+            and (now - _rss_cache["at"]) < 300):
+        return Response(content=_rss_cache["xml"], media_type="application/rss+xml; charset=utf-8")
+
+    q = db.query(Post)
+    if category_id:
+        q = q.filter(Post.category_id == category_id)
+    posts = q.order_by(desc(Post.created_at)).limit(50).all()
+
+    base_url = str(request.base_url).rstrip("/")
+    site_name = get_setting("site_name", "Murmur", db=db)
+    site_desc = get_setting("site_description", "自托管 ASMR 内容平台", db=db)
+
+    from xml.sax.saxutils import escape
+    items_xml = []
+    for p in posts:
+        title = escape(p.title or "")
+        desc_text = escape(p.description or "")
+        link = f"{base_url}/api/posts/{p.id}"
+        pub_date = p.created_at.strftime("%a, %d %b %Y %H:%M:%S +0000") if p.created_at else ""
+        category_str = ""
+        if p.category:
+            category_str = f"<category>{escape(p.category.name)}</category>"
+        enclosure = ""
+        if p.cover_image:
+            cover_url = f"{base_url}/{p.cover_image}"
+            enclosure = f"<enclosure url=\"{cover_url}\" type=\"image/jpeg\" />"
+        items_xml.append(f"""
+    <item>
+      <title>{title}</title>
+      <description>{desc_text}</description>
+      <link>{link}</link>
+      <guid>{link}</guid>
+      <pubDate>{pub_date}</pubDate>
+      {category_str}
+      {enclosure}
+    </item>""")
+
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>{escape(site_name)}</title>
+    <link>{base_url}</link>
+    <description>{escape(site_desc)}</description>
+    <language>zh-cn</language>
+    <lastBuildDate>{datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")}</lastBuildDate>{''.join(items_xml)}
+  </channel>
+</rss>"""
+
+    _rss_cache["xml"] = xml
+    _rss_cache["category_id"] = category_id
+    _rss_cache["at"] = now
+    return Response(content=xml, media_type="application/rss+xml; charset=utf-8")
 
 
 # ─── Frontend SPA ───

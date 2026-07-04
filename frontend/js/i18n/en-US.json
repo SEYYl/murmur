@@ -1,0 +1,49 @@
+{
+  "nav": {
+    "home": "Home",
+    "discover": "Discover",
+    "upload": "Upload",
+    "favorites": "Favorites",
+    "history": "History",
+    "playlists": "Playlists",
+    "settings": "Settings",
+    "admin": "Admin",
+    "login": "Login",
+    "register": "Register",
+    "logout": "Logout"
+  },
+  "player": {
+    "play": "Play",
+    "pause": "Pause",
+    "forward": "Forward",
+    "rewind": "Rewind",
+    "volume": "Volume",
+    "mute": "Mute",
+    "speed": "Speed",
+    "fullscreen": "Fullscreen",
+    "subtitles": "Subtitles"
+  },
+  "common": {
+    "search": "Search",
+    "loading": "Loading",
+    "no_data": "No data",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "publish": "Publish",
+    "upload": "Upload"
+  },
+  "error": {
+    "login_failed": "Login failed",
+    "upload_failed": "Upload failed",
+    "network_error": "Network error"
+  },
+  "settings": {
+    "theme": "Theme",
+    "language": "Language",
+    "change_password": "Change Password",
+    "logout": "Logout"
+  }
+}
