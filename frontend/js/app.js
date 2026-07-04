@@ -153,10 +153,13 @@ function updateUI() {
   const nav = qs('header nav'); if (!nav) return;
   const saved = localStorage.getItem(TT);
   const effective = saved || getSystemTheme();
+  const isStaff = state.user && (state.user.role === 'admin' || state.user.role === 'creator');
   if (state.user) {
     nav.innerHTML = `<span style="color:var(--text2);font-size:.85rem;font-weight:500">${esc(state.user.username)}</span>
-      <button class="btn btn-ghost" onclick="navigate('upload')">📤 上传</button>
-      <button class="btn btn-ghost" onclick="navigate('admin')">📋 管理</button>
+      <button class="btn btn-ghost" onclick="navigate('history')">🕒 历史</button>
+      <button class="btn btn-ghost" onclick="navigate('favorites')">❤️ 收藏</button>
+      ${isStaff ? `<button class="btn btn-ghost" onclick="navigate('upload')">📤 上传</button>` : ''}
+      ${isStaff ? `<button class="btn btn-ghost" onclick="navigate('admin')">📋 管理</button>` : ''}
       <button class="btn btn-icon btn-ghost" onclick="toggleTheme()" title="${effective==='dark'?'切换到白天':'切换到黑夜'}">${effective==='dark'?'☀️':'🌙'}</button>
       <button class="btn btn-icon btn-ghost" onclick="navigate('settings')" title="设置">⚙️</button>
       <button class="btn btn-ghost" onclick="logout()" style="color:var(--text3)">退出</button>`;
@@ -172,7 +175,14 @@ function navigate(view, data) {
   state.view = view||'home'; if (data!==undefined) state.postId = data;
   const c = $('content'); if (!c) return;
   c.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  if (view==='upload') renderUpload(); else if (view==='post') renderPost(); else if (view==='settings') renderSettings(); else if (view==='admin') renderAdmin(); else renderHome();
+  if (view==='upload') renderUpload();
+  else if (view==='edit') renderEdit();
+  else if (view==='post') renderPost();
+  else if (view==='settings') renderSettings();
+  else if (view==='admin') renderAdmin();
+  else if (view==='favorites') renderFavorites();
+  else if (view==='history') renderHistory();
+  else renderHome();
   window.scrollTo({top:0,behavior:'smooth'});
 }
 
@@ -228,15 +238,20 @@ async function loadPosts() {
     const card = document.createElement('div'); card.className = 'card';
     card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',p.id); };
     const rp = getResumePos(p.id);
+    const isFav = p.is_favorited || false;
+    const favCount = p.favorite_count || 0;
     card.innerHTML = `<div class="cover">
       ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
       <div class="overlay"><div class="play">▶</div></div>
       <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
       ${p.duration>0?`<div class="dur">${dur(p.duration)}</div>`:''}
       ${rp?`<div class="resume-badge">▶ ${dur(rp.currentTime)}</div>`:''}
+      <button class="fav-btn-card ${isFav?'active':''}" onclick="event.stopPropagation();toggleCardFavorite(this,${p.id})" title="收藏">
+        ${isFav?'❤️':'🤍'}
+      </button>
     </div><div class="info">
       <h3>${esc(p.title)}</h3>
-      <div class="meta"><span>👁 ${p.views}</span></div>
+      <div class="meta"><span>👁 ${p.views}</span><span>❤️ ${favCount}</span></div>
       <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
         ${p.category?`<div class="tag">${p.category.icon} ${esc(p.category.name)}</div>`:''}
         <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${p.id},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">＋</button>
@@ -448,8 +463,21 @@ async function renderPost() {
     </div>`;
   }
 
-  // Resume position check
-  const resume = getResumePos(pid);
+  let serverResume = null;
+  if(state.user){
+    const r = await api(`/api/posts/${pid}/resume`);
+    if(r && r.position > 0 && r.duration > 0 && r.position / r.duration < 0.95){
+      serverResume = { currentTime: r.position, duration: r.duration };
+    }
+  }
+  const localResume = getResumePos(pid);
+  const resume = serverResume || localResume;
+
+  const isAdmin = state.user && state.user.role === 'admin';
+  const isOwner = state.user && p.user && p.user.id === state.user.id;
+  const canEdit = isAdmin || isOwner;
+  const favCount = p.favorite_count || 0;
+  const isFav = p.is_favorited || false;
 
   let html = `<button class="back" onclick="navigate()">← 返回</button>
     <div id="queue-bar" class="queue-bar"></div>
@@ -460,11 +488,19 @@ async function renderPost() {
           ${p.category?`<span>${p.category.icon} ${esc(p.category.name)}</span>`:''}
           ${p.duration>0?`<span>⏱ ${dur(p.duration)}</span>`:''}
           ${p.file_size?`<span>📦 ${fs(p.file_size)}</span>`:''}
+          <span>👁 ${p.views}</span>
+          <span>❤️ ${favCount}</span>
           <span>📅 ${dt(p.created_at)}</span>
+          ${p.user?`<span>👤 ${esc(p.user.username)}</span>`:''}
         </div>
         ${p.description?`<div class="desc">${esc(p.description)}</div>`:''}
-        <div style="display:flex;gap:8px;margin-top:12px">
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn ${isFav?'btn-primary':'btn-secondary'}" id="fav-btn" onclick="toggleFavorite(${pid})">
+            ${isFav?'❤️ 已收藏':'🤍 收藏'} <span id="fav-count">${favCount}</span>
+          </button>
           <button class="btn btn-secondary" onclick="addToQueue({id:${pid},title:'${esc(p.title)}',file_type:'${p.file_type}',duration:${p.duration||0}})">➕ 加入队列</button>
+          ${canEdit?`<button class="btn btn-secondary" onclick="navigate('edit',${pid})">✏️ 编辑</button>`:''}
+          ${canEdit?`<button class="btn btn-secondary" style="color:#f87171" onclick="deletePost(${pid})">🗑 删除</button>`:''}
         </div>
       </div>
     </div>`;
@@ -472,25 +508,145 @@ async function renderPost() {
   updateQueueBar();
 
   // Bind audio/video events
+  let heartbeatTimer = null;
+  let lastHeartbeat = 0;
+  function sendHeartbeat(pos, dur) {
+    if(!state.user) return;
+    const now = Date.now();
+    if(now - lastHeartbeat < 3000) return;
+    lastHeartbeat = now;
+    api(`/api/posts/${pid}/heartbeat`, {
+      method:'POST',
+      body: JSON.stringify({position: pos, duration: dur})
+    });
+  }
+  function startHeartbeat(getPos, getDur) {
+    if(heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      const pos = getPos(), dur = getDur();
+      if(pos && dur){
+        sendHeartbeat(pos, dur);
+      }
+    }, 10000);
+  }
+  function stopHeartbeat() {
+    if(heartbeatTimer){ clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
+
+  function showResumeOverlay(startPlay) {
+    if(!resume) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'resume-overlay';
+    overlay.innerHTML = `<div class="resume-box">
+      <div class="resume-title">继续播放</div>
+      <div class="resume-sub">上次看到 ${dur(resume.currentTime)}</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-secondary" id="resume-cancel">从头开始</button>
+        <button class="btn btn-primary" id="resume-btn">▶ 继续播放</button>
+      </div>
+      <div class="resume-countdown" id="resume-cd">3 秒后自动播放...</div>
+    </div>`;
+    const playerWrap = isV ? $(`vpw-${pid}`) : qs('.audio-player-card');
+    if(playerWrap){
+      playerWrap.style.position = 'relative';
+      playerWrap.appendChild(overlay);
+    } else {
+      document.body.appendChild(overlay);
+    }
+    let count = 3;
+    const cdEl = $('resume-cd');
+    const timer = setInterval(() => {
+      count--;
+      if(cdEl) cdEl.textContent = `${count} 秒后自动播放...`;
+      if(count <= 0){
+        clearInterval(timer);
+        overlay.remove();
+        startPlay();
+      }
+    }, 1000);
+    $('resume-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearInterval(timer);
+      overlay.remove();
+      startPlay();
+    });
+    $('resume-cancel')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearInterval(timer);
+      overlay.remove();
+    });
+  }
+
   if (isV) {
     const v = document.getElementById(`vel-${pid}`);
     if (v) {
-      v.addEventListener('timeupdate', () => { vupdateUI(pid); savePosition(pid, v.currentTime, v.duration); });
-      v.addEventListener('loadedmetadata', () => { vupdateUI(pid); if (resume && v.duration) v.currentTime = Math.min(resume.currentTime, v.duration - 5); });
-      v.addEventListener('play', () => vupdateUI(pid));
-      v.addEventListener('pause', () => vupdateUI(pid));
-      v.addEventListener('ended', () => { vupdateUI(pid); clearPosition(pid); playNext(); });
+      let resumed = false;
+      v.addEventListener('timeupdate', () => {
+        vupdateUI(pid);
+        savePosition(pid, v.currentTime, v.duration);
+      });
+      v.addEventListener('loadedmetadata', () => {
+        vupdateUI(pid);
+        if (resume && v.duration && serverResume) {
+          showResumeOverlay(() => {
+            v.currentTime = Math.min(resume.currentTime, v.duration - 5);
+            v.play();
+          });
+        } else if (resume && v.duration) {
+          v.currentTime = Math.min(resume.currentTime, v.duration - 5);
+        }
+      });
+      v.addEventListener('play', () => {
+        vupdateUI(pid);
+        startHeartbeat(()=>v.currentTime, ()=>v.duration);
+      });
+      v.addEventListener('pause', () => {
+        vupdateUI(pid);
+        stopHeartbeat();
+        sendHeartbeat(v.currentTime, v.duration);
+      });
+      v.addEventListener('ended', () => {
+        vupdateUI(pid);
+        stopHeartbeat();
+        clearPosition(pid);
+        playNext();
+      });
     }
     const vov = document.getElementById(`vov-${pid}`);
     if (vov) { vov.classList.add('visible'); setTimeout(() => { if (v && !v.paused) vov.classList.remove('visible'); }, 3000); }
   } else {
     const a = document.getElementById(`ael-${pid}`);
     if (a) {
-      a.addEventListener('timeupdate', () => { aupdateUI(pid); savePosition(pid, a.currentTime, a.duration); });
-      a.addEventListener('loadedmetadata', () => { aupdateUI(pid); if (resume && a.duration) a.currentTime = Math.min(resume.currentTime, a.duration - 5); });
-      a.addEventListener('play', () => aupdateUI(pid));
-      a.addEventListener('pause', () => aupdateUI(pid));
-      a.addEventListener('ended', () => { aupdateUI(pid); clearPosition(pid); playNext(); });
+      a.addEventListener('timeupdate', () => {
+        aupdateUI(pid);
+        savePosition(pid, a.currentTime, a.duration);
+      });
+      a.addEventListener('loadedmetadata', () => {
+        aupdateUI(pid);
+        if (resume && a.duration && serverResume) {
+          showResumeOverlay(() => {
+            a.currentTime = Math.min(resume.currentTime, a.duration - 5);
+            a.play();
+          });
+        } else if (resume && a.duration) {
+          a.currentTime = Math.min(resume.currentTime, a.duration - 5);
+        }
+      });
+      a.addEventListener('play', () => {
+        aupdateUI(pid);
+        startHeartbeat(()=>a.currentTime, ()=>a.duration);
+      });
+      a.addEventListener('pause', () => {
+        aupdateUI(pid);
+        stopHeartbeat();
+        sendHeartbeat(a.currentTime, a.duration);
+      });
+      a.addEventListener('ended', () => {
+        aupdateUI(pid);
+        stopHeartbeat();
+        clearPosition(pid);
+        playNext();
+      });
       const apo = document.getElementById(`apo-${pid}`);
       if (apo) apo.style.display = 'flex';
     }
@@ -566,7 +722,70 @@ async function submitUpload() {
   const r = await api('/api/posts', { method:'POST', body:fd });
   if(btn){btn.disabled=false;btn.innerHTML='📤 上传'}
   if(r?.id) { toast('✅ 上传成功！', 'success'); navigate('post', r.id); }
-  else toast(r?.detail||'上传失败', 'error');
+  else toast(r?.detail||'上传失败','error');
+}
+
+let _editCover = null;
+
+async function renderEdit() {
+  if(!state.user){showLogin();return;}
+  const pid = state.postId;
+  const p = await api(`/api/posts/${pid}`);
+  if(!p){navigate('home');return;}
+  const isAdmin = state.user.role === 'admin';
+  const isOwner = p.user && p.user.id === state.user.id;
+  if(!isAdmin && !isOwner){navigate('home');toast('⛔ 无权限编辑','error');return;}
+  _editCover = null;
+  _selCat = p.category_id || null;
+  const cats = await api('/api/categories')||[];
+  const con = $('content');
+  const cover = p.cover_image?`${API}/${p.cover_image}`:'';
+  con.innerHTML = `<button class="back" onclick="navigate('post',${pid})">← 返回</button>
+    <div class="page-header"><h1>✏️ 编辑内容</h1><div class="sub">修改内容的标题、描述、分类或封面</div></div>
+    <div class="upload-form">
+      <div id="ds">
+        <div class="form-group"><label>📝 标题</label><input id="etitle" value="${esc(p.title)}" placeholder="给你的 ASMR 取个名字..."></div>
+        <div class="form-group"><label>📖 描述</label><textarea id="edesc" placeholder="简单描述一下这个内容...">${esc(p.description||'')}</textarea></div>
+        <div class="form-group"><label>🏷️ 分类</label>
+          <div class="cat-picker" id="ecat-picker">${cats.map(c=>`<div class="cat-option ${_selCat===c.id?'selected':''}" data-id="${c.id}" onclick="selectEditCat(${c.id})"><div class="cg-icon">${c.icon}</div>${esc(c.name)}</div>`).join('')}</div>
+        </div>
+        <div class="form-group"><label>🖼️ 封面（可选，不更换则留空）</label>
+          ${cover?`<div style="margin-bottom:10px"><img src="${cover}" style="max-width:180px;border-radius:8px;border:1px solid var(--border)"></div>`:''}
+          <button class="btn btn-secondary" onclick="$('eci').click()">${cover?'更换封面':'选择封面图片'}</button>
+          <input type="file" id="eci" accept="image/*" onchange="hec(event)" style="display:none">
+          <div id="ecp" style="display:none;margin-top:10px"><img id="ecpi" style="max-width:180px;border-radius:8px;border:1px solid var(--border)"></div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" onclick="submitEdit(${pid})">💾 保存修改</button></div>
+      </div>
+    </div>`;
+}
+
+function selectEditCat(id) {
+  _selCat = id;
+  document.querySelectorAll('#ecat-picker .cat-option').forEach(el=>el.classList.toggle('selected',parseInt(el.dataset.id)===id));
+}
+
+function hec(e) {
+  const f = e.target.files?.[0]; if(!f) return;
+  _editCover = f; const r = new FileReader();
+  r.onload = e => { $('ecp').style.display='block'; $('ecpi').src=e.target.result; };
+  r.readAsDataURL(f);
+}
+
+async function submitEdit(id) {
+  const title = $('etitle')?.value.trim();
+  if(!title) { toast('请输入标题', 'error'); return; }
+  if(!_selCat) { toast('请选择分类', 'error'); return; }
+  const fd = new FormData();
+  fd.append('title', title);
+  fd.append('description', ($('edesc')?.value||'').trim());
+  fd.append('category_id', _selCat);
+  if(_editCover) fd.append('cover', _editCover);
+  const btn = qs('.btn-primary'); if(btn){btn.disabled=true;btn.innerHTML='⏳ 保存中...'}
+  const r = await api(`/api/posts/${id}`, { method:'PUT', body:fd });
+  if(btn){btn.disabled=false;btn.innerHTML='💾 保存修改'}
+  if(r?.ok) { toast('✅ 保存成功！', 'success'); navigate('post', id); }
+  else toast(r?.detail||'保存失败','error');
 }
 
 // ─── Settings ───
@@ -616,92 +835,256 @@ async function changePw() {
   else toast(r?.detail||'修改失败','error');
 }
 
+let _favCat = null, _favSort = 'time', _favSearch = '', _favPage = 1;
+
+async function renderFavorites() {
+  if(!state.user){showLogin();return;}
+  const cats = await api('/api/categories')||[];
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header">
+      <div><h1>❤️ 我的收藏</h1><div class="sub">你收藏的所有内容</div></div>
+    </div>
+    <div class="search-bar">
+      <input id="fav-si" placeholder="搜索收藏..." value="${esc(_favSearch)}" onkeydown="if(event.key==='Enter'){_favSearch=this.value;_favPage=1;renderFavorites()}">
+      <button onclick="_favSearch=$('fav-si').value;_favPage=1;renderFavorites()">🔍</button>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn ${!_favCat?'btn-primary':'btn-secondary'}" onclick="_favCat=null;_favPage=1;renderFavorites()">🌐 全部</button>
+        ${cats.map(c=>`<button class="btn ${_favCat===c.id?'btn-primary':'btn-secondary'}" onclick="_favCat=${c.id};_favPage=1;renderFavorites()">${c.icon} ${c.name}</button>`).join('')}
+      </div>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn ${_favSort==='time'?'btn-primary':'btn-secondary'}" onclick="_favSort='time';_favPage=1;renderFavorites()">时间</button>
+        <button class="btn ${_favSort==='latest'?'btn-primary':'btn-secondary'}" onclick="_favSort='latest';_favPage=1;renderFavorites()">最新</button>
+        <button class="btn ${_favSort==='popular'?'btn-primary':'btn-secondary'}" onclick="_favSort='popular';_favPage=1;renderFavorites()">热门</button>
+      </div>
+    </div>
+    <div id="fav-posts"><div class="loading"><div class="spinner"></div></div></div>`;
+  await loadFavPosts();
+}
+
+async function loadFavPosts() {
+  const con = $('fav-posts'); if(!con) return;
+  let url = `/api/me/favorites?page=${_favPage}&sort=${_favSort}`;
+  if(_favCat) url+=`&category_id=${_favCat}`;
+  if(_favSearch) url+=`&search=${encodeURIComponent(_favSearch)}`;
+  const data = await api(url);
+  if(!data||!data.items||!data.items.length) {
+    con.innerHTML = '<div class="empty"><div class="icon">❤️</div><p>还没有收藏内容</p></div>'; return; }
+  const grid = document.createElement('div'); grid.className = 'grid';
+  for(const p of data.items) {
+    const post = p.post || p;
+    const isV = post.file_type==='video', cv = post.cover_image?`${API}/${post.cover_image}`:'';
+    const card = document.createElement('div'); card.className = 'card';
+    card.onclick = () => { if(isV&&!state.user){showLogin();return;} navigate('post',post.id); };
+    const isFav = true;
+    const favCount = post.favorite_count || 0;
+    card.innerHTML = `<div class="cover">
+      ${cv?`<img src="${cv}" loading="lazy">`:`<span style="font-size:2.2rem;opacity:.25">${isV?'🎬':'🎵'}</span>`}
+      <div class="overlay"><div class="play">▶</div></div>
+      <div class="badge">${isV?'🎬 视频':'🎵 音频'}</div>
+      ${post.duration>0?`<div class="dur">${dur(post.duration)}</div>`:''}
+      <button class="fav-btn-card active" onclick="event.stopPropagation();toggleCardFavorite(this,${post.id})" title="取消收藏">❤️</button>
+    </div><div class="info">
+      <h3>${esc(post.title)}</h3>
+      <div class="meta"><span>👁 ${post.views}</span><span>❤️ ${favCount}</span></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+        ${post.category?`<div class="tag">${post.category.icon} ${esc(post.category.name)}</div>`:''}
+        <button class="queue-add-btn" onclick="event.stopPropagation();addToQueue({id:${post.id},title:'${esc(post.title)}',file_type:'${post.file_type}',duration:${post.duration||0}})">＋</button>
+      </div>
+    </div>`;
+    grid.appendChild(card);
+  }
+  con.innerHTML = ''; con.appendChild(grid);
+  if(data.total_pages>1) {
+    const pg = document.createElement('div'); pg.style.cssText='display:flex;justify-content:center;gap:8px;margin-top:24px';
+    if(data.page>1) pg.innerHTML+=`<button class="btn btn-secondary" onclick="_favPage=${data.page-1};loadFavPosts()">← 上一页</button>`;
+    if(data.page<data.total_pages) pg.innerHTML+=`<button class="btn btn-secondary" onclick="_favPage=${data.page+1};loadFavPosts()">下一页 →</button>`;
+    con.appendChild(pg);
+  }
+}
+
+let _histCat = null, _histPage = 1;
+
+async function renderHistory() {
+  if(!state.user){showLogin();return;}
+  const cats = await api('/api/categories')||[];
+  const con = $('content');
+  con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
+    <div class="page-header">
+      <div><h1>🕒 播放历史</h1><div class="sub">你看过的所有内容</div></div>
+      <button class="btn btn-secondary" style="color:#f87171" onclick="clearAllHistory()">🗑 清空全部</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <button class="btn ${!_histCat?'btn-primary':'btn-secondary'}" onclick="_histCat=null;_histPage=1;renderHistory()">🌐 全部</button>
+      ${cats.map(c=>`<button class="btn ${_histCat===c.id?'btn-primary':'btn-secondary'}" onclick="_histCat=${c.id};_histPage=1;renderHistory()">${c.icon} ${c.name}</button>`).join('')}
+    </div>
+    <div id="hist-list"><div class="loading"><div class="spinner"></div></div></div>`;
+  await loadHistory();
+}
+
+async function loadHistory() {
+  const con = $('hist-list'); if(!con) return;
+  let url = `/api/me/history?page=${_histPage}`;
+  if(_histCat) url+=`&category_id=${_histCat}`;
+  const data = await api(url);
+  if(!data||!data.items||!data.items.length) {
+    con.innerHTML = '<div class="empty"><div class="icon">🕒</div><p>还没有播放历史</p></div>'; return;
+  }
+  let html = '<div style="display:flex;flex-direction:column;gap:8px">';
+  for(const h of data.items) {
+    const post = h.post || h;
+    const isV = post.file_type==='video';
+    const cv = post.cover_image?`${API}/${post.cover_image}`:'';
+    const pos = h.position || 0;
+    const dur2 = h.duration || post.duration || 0;
+    const pct = dur2 > 0 ? Math.min(100, (pos/dur2)*100) : 0;
+    html += `<div style="display:flex;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px;cursor:pointer" onclick="playFromHistory(${post.id})">
+      <div style="width:160px;height:90px;border-radius:8px;overflow:hidden;background:var(--bg3);flex-shrink:0;position:relative">
+        ${cv?`<img src="${cv}" style="width:100%;height:100%;object-fit:cover">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2rem;opacity:.3">${isV?'🎬':'🎵'}</div>`}
+        <div style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(0,0,0,.3)">
+          <div style="height:100%;background:var(--accent);width:${pct}%"></div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+          <div style="font-weight:600;font-size:.95rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(post.title)}</div>
+          <div style="font-size:.8rem;color:var(--text3);margin-top:2px">
+            ${post.category?`${post.category.icon} ${esc(post.category.name)} · `:''}${dur(pos)} / ${dur(dur2)}
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:.75rem;color:var(--text3)">${dt(h.played_at)}</div>
+          <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="event.stopPropagation();deleteHistoryItem(${h.id})" title="删除">🗑</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  html += '</div>';
+  if(data.total_pages>1) {
+    html += `<div style="display:flex;justify-content:center;gap:8px;margin-top:24px">`;
+    if(data.page>1) html += `<button class="btn btn-secondary" onclick="_histPage=${data.page-1};loadHistory()">← 上一页</button>`;
+    if(data.page<data.total_pages) html += `<button class="btn btn-secondary" onclick="_histPage=${data.page+1};loadHistory()">下一页 →</button>`;
+    html += '</div>';
+  }
+  con.innerHTML = html;
+}
+
+async function playFromHistory(id) {
+  navigate('post', id);
+}
+
+async function deleteHistoryItem(id) {
+  if(!confirm('确定删除这条历史记录吗？')) return;
+  const r = await api(`/api/me/history/${id}`,{method:'DELETE'});
+  if(r?.ok){toast('✅ 已删除','success');loadHistory();}
+  else toast(r?.detail||'删除失败','error');
+}
+
+async function clearAllHistory() {
+  if(!confirm('确定清空所有播放历史吗？此操作不可撤销。')) return;
+  const r = await api('/api/me/history',{method:'DELETE'});
+  if(r?.ok){toast('✅ 已清空历史','success');renderHistory();}
+  else toast(r?.detail||'操作失败','error');
+}
+
 // ─── Admin ───
 let _adminCat = null;
 
 async function renderAdmin() {
   if(!state.user){showLogin();return;}
+  const isAdmin = state.user.role === 'admin';
+  const isCreator = state.user.role === 'creator';
+  if(!isAdmin && !isCreator){navigate('home');toast('⛔ 无权限访问','error');return;}
   const con = $('content');
   con.innerHTML = `<button class="back" onclick="navigate()">← 返回</button>
-    <div class="page-header"><h1>📋 内容管理</h1><div class="sub">管理所有上传的音频和视频</div></div>`;
+    <div class="page-header"><h1>📋 内容管理</h1><div class="sub">${isAdmin?'管理所有上传的音频和视频':'管理我上传的内容'}</div></div>`;
   
-  // Stats bar
   const cats = await api('/api/categories')||[];
-  const stats = await api('/api/posts?page_size=1')||{};
-  const total = stats.total||0;
-  con.innerHTML += `<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700">${total}</div><div style="font-size:.75rem;color:var(--text3)">全部内容</div></div>
-    ${cats.map(c=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:100px"><div style="font-size:.9rem;font-weight:600">${c.icon} ${c.name}</div><div style="font-size:.75rem;color:var(--text3)">${c.post_count} 个</div></div>`).join('')}
-  </div>`;
   
-  // Category filter
+  if(isAdmin){
+    const stats = await api('/api/posts?page_size=1')||{};
+    const total = stats.total||0;
+    con.innerHTML += `<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:120px"><div style="font-size:1.5rem;font-weight:700">${total}</div><div style="font-size:.75rem;color:var(--text3)">全部内容</div></div>
+      ${cats.map(c=>`<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:14px 20px;min-width:100px"><div style="font-size:.9rem;font-weight:600">${c.icon} ${c.name}</div><div style="font-size:.75rem;color:var(--text3)">${c.post_count} 个</div></div>`).join('')}
+    </div>`;
+  }
+  
   con.innerHTML += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
     <button class="btn ${!_adminCat?'btn-primary':'btn-secondary'}" onclick="_adminCat=null;renderAdmin()">🌐 全部</button>
     ${cats.map(c=>`<button class="btn ${_adminCat===c.id?'btn-primary':'btn-secondary'}" onclick="_adminCat=${c.id};renderAdmin()">${c.icon} ${c.name}</button>`).join('')}
   </div>`;
   
-  // Content list
   con.innerHTML += `<div id="admin-list"><div class="loading"><div class="spinner"></div></div></div>`;
   
-  // Load posts
   let url = `/api/posts?page_size=100&sort=latest`;
   if(_adminCat) url += `&category_id=${_adminCat}`;
   const data = await api(url);
   const list = $('admin-list');
   if(!data||!data.items||!data.items.length){
     list.innerHTML='<div class="empty"><div class="icon">📦</div><p>还没有内容</p></div>';
-    return;
+  } else {
+    let items = data.items;
+    if(isCreator){
+      items = items.filter(p => p.user && p.user.id === state.user.id);
+    }
+    if(!items.length){
+      list.innerHTML='<div class="empty"><div class="icon">📦</div><p>还没有内容</p></div>';
+    } else {
+      let html = '';
+      for(const p of items){
+        const isV = p.file_type==='video';
+        const canEdit = isAdmin || (p.user && p.user.id === state.user.id);
+        html += `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:8px">
+          <div style="font-size:1.5rem;opacity:.5;flex-shrink:0">${isV?'🎬':'🎵'}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
+            <div style="font-size:.75rem;color:var(--text3);margin-top:2px">
+              ${p.category?`${p.category.icon} ${esc(p.category.name)}`:'未分类'} · ${p.duration>0?dur(p.duration):'?'} · 👁${p.views} · ${dt(p.created_at)}
+              ${p.user?` · 👤 ${esc(p.user.username)}`:''}
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <button class="btn btn-ghost" onclick="navigate('post',${p.id})">👁 查看</button>
+            ${canEdit?`<button class="btn btn-ghost" onclick="navigate('edit',${p.id})">✏️ 编辑</button>`:''}
+            ${canEdit?`<button class="btn btn-ghost" style="color:#f87171" onclick="deleteItem(${p.id})">🗑 删除</button>`:''}
+          </div>
+        </div>`;
+      }
+      html += `<div style="text-align:center;margin-top:12px;font-size:.8rem;color:var(--text3)">共 ${items.length} 条内容</div>`;
+      list.innerHTML = html;
+    }
   }
   
-  let html = '';
-  for(const p of data.items){
-    const isV = p.file_type==='video';
-    html += `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;margin-bottom:8px">
-      <div style="font-size:1.5rem;opacity:.5;flex-shrink:0">${isV?'🎬':'🎵'}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</div>
-        <div style="font-size:.75rem;color:var(--text3);margin-top:2px">
-          ${p.category?`${p.category.icon} ${esc(p.category.name)}`:'未分类'} · ${p.duration>0?dur(p.duration):'?'} · 👁${p.views} · ${dt(p.created_at)}
-        </div>
-      </div>
-      <div style="display:flex;gap:6px;flex-shrink:0">
-        <button class="btn btn-ghost" onclick="navigate('post',${p.id})">👁 查看</button>
-        <button class="btn btn-ghost" style="color:#f87171" onclick="deleteItem(${p.id})">🗑 删除</button>
+  if(isAdmin){
+    con.innerHTML += `<hr style="border:none;border-top:1px solid var(--border);margin:32px 0">
+      <div class="page-header" style="margin-bottom:16px"><h2>🏷️ 分类管理</h2></div>
+      <div id="cat-mgr"><div class="loading"><div class="spinner"></div></div></div>`;
+    
+    const cats2 = await api('/api/categories')||[];
+    let ch = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:16px">`;
+    for(const c of cats2){
+      ch += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;display:flex;align-items:center;gap:10px">
+        <span style="font-size:1.3rem">${c.icon}</span>
+        <span style="flex:1;font-size:.9rem;font-weight:500">${esc(c.name)}</span>
+        <span style="font-size:.75rem;color:var(--text3)">${c.post_count}个</span>
+        <button class="btn btn-ghost btn-icon" onclick="editCat(${c.id},'${esc(c.name)}','${c.icon}')" title="编辑">✏️</button>
+        <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="deleteCat(${c.id})" title="删除" ${c.post_count>0?'disabled':''}>🗑</button>
+      </div>`;
+    }
+    ch += `</div>`;
+    ch += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px">
+      <h3 style="font-size:.9rem;margin-bottom:12px">➕ 添加新分类</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="new-cat-icon" value="🎵" style="width:48px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px;color:var(--text);font-size:1.1rem;text-align:center">
+        <input id="new-cat-name" placeholder="分类名称" style="flex:1;min-width:120px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem">
+        <button class="btn btn-primary" onclick="addCat()">添加</button>
       </div>
     </div>`;
+    $('cat-mgr').innerHTML = ch;
   }
-  html += `<div style="text-align:center;margin-top:12px;font-size:.8rem;color:var(--text3)">共 ${data.total} 条内容</div>`;
-  list.innerHTML = html;
-  
-  // ─── 分类管理区 ───
-  con.innerHTML += `<hr style="border:none;border-top:1px solid var(--border);margin:32px 0">
-    <div class="page-header" style="margin-bottom:16px"><h2>🏷️ 分类管理</h2></div>
-    <div id="cat-mgr"><div class="loading"><div class="spinner"></div></div></div>`;
-  
-  // Load fresh cats
-  const cats2 = await api('/api/categories')||[];
-  let ch = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin-bottom:16px">`;
-  for(const c of cats2){
-    ch += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:12px 16px;display:flex;align-items:center;gap:10px">
-      <span style="font-size:1.3rem">${c.icon}</span>
-      <span style="flex:1;font-size:.9rem;font-weight:500">${esc(c.name)}</span>
-      <span style="font-size:.75rem;color:var(--text3)">${c.post_count}个</span>
-      <button class="btn btn-ghost btn-icon" onclick="editCat(${c.id},'${esc(c.name)}','${c.icon}')" title="编辑">✏️</button>
-      <button class="btn btn-ghost btn-icon" style="color:#f87171" onclick="deleteCat(${c.id})" title="删除" ${c.post_count>0?'disabled':''}>🗑</button>
-    </div>`;
-  }
-  ch += `</div>`;
-  
-  // Add new category form
-  ch += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:16px">
-    <h3 style="font-size:.9rem;margin-bottom:12px">➕ 添加新分类</h3>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <input id="new-cat-icon" value="🎵" style="width:48px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px;color:var(--text);font-size:1.1rem;text-align:center">
-      <input id="new-cat-name" placeholder="分类名称" style="flex:1;min-width:120px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem">
-      <button class="btn btn-primary" onclick="addCat()">添加</button>
-    </div>
-  </div>`;
-  $('cat-mgr').innerHTML = ch;
 }
 
 async function deleteItem(id) {
@@ -709,6 +1092,54 @@ async function deleteItem(id) {
   const r = await api(`/api/posts/${id}`,{method:'DELETE'});
   if(r?.ok){toast('✅ 已删除','success');renderAdmin();}
   else toast(r?.detail||'删除失败','error');
+}
+
+async function deletePost(id) {
+  if(!confirm('确定要删除这条内容吗？')) return;
+  const r = await api(`/api/posts/${id}`,{method:'DELETE'});
+  if(r?.ok){toast('✅ 已删除','success');navigate('home');}
+  else toast(r?.detail||'删除失败','error');
+}
+
+async function toggleFavorite(id) {
+  if(!state.user){showLogin();return;}
+  const btn = $('fav-btn');
+  const countEl = $('fav-count');
+  const wasFav = btn?.classList.contains('btn-primary');
+  const newCount = wasFav ? (parseInt(countEl?.textContent||0)-1) : (parseInt(countEl?.textContent||0)+1);
+  if(btn){
+    btn.classList.toggle('btn-primary', !wasFav);
+    btn.classList.toggle('btn-secondary', wasFav);
+    btn.innerHTML = `${!wasFav?'❤️ 已收藏':'🤍 收藏'} <span id="fav-count">${Math.max(0,newCount)}</span>`;
+  }
+  const r = await api(`/api/posts/${id}/favorite`,{method:'POST'});
+  if(r?.favorited !== undefined){
+    if(btn){
+      btn.classList.toggle('btn-primary', r.favorited);
+      btn.classList.toggle('btn-secondary', !r.favorited);
+      btn.innerHTML = `${r.favorited?'❤️ 已收藏':'🤍 收藏'} <span id="fav-count">${r.count||0}</span>`;
+    }
+  }
+}
+
+async function toggleCardFavorite(btn, id) {
+  if(!state.user){showLogin();return;}
+  const wasFav = btn.classList.contains('active');
+  btn.classList.toggle('active', !wasFav);
+  btn.textContent = !wasFav ? '❤️' : '🤍';
+  const meta = btn.closest('.card')?.querySelector('.meta span:last-child');
+  if(meta){
+    const cur = parseInt(meta.textContent.replace(/[^0-9]/g,''))||0;
+    meta.textContent = `❤️ ${Math.max(0, wasFav?cur-1:cur+1)}`;
+  }
+  const r = await api(`/api/posts/${id}/favorite`,{method:'POST'});
+  if(r?.favorited !== undefined){
+    btn.classList.toggle('active', r.favorited);
+    btn.textContent = r.favorited ? '❤️' : '🤍';
+    if(meta){
+      meta.textContent = `❤️ ${r.count||0}`;
+    }
+  }
 }
 
 async function addCat() {

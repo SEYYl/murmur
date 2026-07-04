@@ -1,4 +1,5 @@
 import os, uuid, shutil, subprocess, json, time, mimetypes
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Query, Request
@@ -8,8 +9,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, Res
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_
 
-from backend.models import init_db, get_db, Category, Post, User, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
-from backend.auth import hash_password, verify_password, create_access_token, get_current_user
+from backend.models import init_db, get_db, Category, Post, User, UserFavorite, PlayHistory, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS
+from backend.auth import hash_password, verify_password, create_access_token, get_current_user, require_creator, require_admin, get_token
 
 # ─── View count anti-spam ───
 _view_history = {}  # {(post_id, ip): timestamp}
@@ -22,6 +23,38 @@ def should_count_view(post_id: int, ip: str) -> bool:
         return False
     _view_history[key] = now
     return True
+
+
+def fmt_post(p, user=None, db=None):
+    favorite_count = db.query(UserFavorite).filter(UserFavorite.post_id == p.id).count() if db else 0
+    is_favorited = False
+    if user and db:
+        is_favorited = db.query(UserFavorite).filter(
+            UserFavorite.post_id == p.id, UserFavorite.user_id == user.id
+        ).first() is not None
+    return {
+        "id": p.id, "title": p.title,
+        "file_type": p.file_type, "duration": p.duration,
+        "cover_image": p.cover_image, "views": p.views,
+        "favorite_count": favorite_count, "is_favorited": is_favorited,
+        "created_at": p.created_at.isoformat(),
+        "category": {"id": p.category.id, "name": p.category.name, "icon": p.category.icon} if p.category else None,
+    }
+
+
+def optional_user(request: Request, db: Session = Depends(get_db)):
+    from jose import JWTError, jwt
+    from backend.auth import SECRET_KEY, ALGORITHM
+    token = get_token(request)
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        uid = int(payload.get("sub", 0))
+        u = db.query(User).filter(User.id == uid, User.status == "active").first()
+        return u
+    except (JWTError, ValueError, TypeError):
+        return None
 
 
 app = FastAPI(title="ASMR")
@@ -204,12 +237,12 @@ def register(data: dict, db: Session = Depends(get_db)):
         raise HTTPException(400, "密码至少4个字符")
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(400, "用户名已存在")
-    user = User(username=username, password_hash=hash_password(password))
+    user = User(username=username, password_hash=hash_password(password), role="user")
     db.add(user)
     db.commit()
     db.refresh(user)
     token = create_access_token({"sub": user.id})
-    return {"token": token, "user": {"id": user.id, "username": user.username}}
+    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role}}
 
 
 @app.post("/api/login")
@@ -219,13 +252,15 @@ def login(data: dict, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(401, "用户名或密码错误")
+    user.last_login_at = datetime.now(timezone.utc)
+    db.commit()
     token = create_access_token({"sub": user.id})
-    return {"token": token, "user": {"id": user.id, "username": user.username}}
+    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role}}
 
 
 @app.get("/api/me")
 def get_me(user: User = Depends(get_current_user)):
-    return {"id": user.id, "username": user.username}
+    return {"id": user.id, "username": user.username, "role": user.role}
 
 
 @app.post("/api/change-password")
@@ -291,7 +326,7 @@ def delete_category(cid: int, user: User = Depends(get_current_user), db: Sessio
 def list_posts(
     category_id: int = Query(None), search: str = Query(None),
     sort: str = Query("latest"), page: int = Query(1, ge=1),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db), user: User = Depends(optional_user)
 ):
     q = db.query(Post)
     if category_id:
@@ -305,35 +340,25 @@ def list_posts(
         q = q.order_by(desc(Post.created_at))
     total = q.count()
     posts = q.offset((page - 1) * 20).limit(20).all()
-
-    def fmt(p):
-        return {
-            "id": p.id, "title": p.title,
-            "file_type": p.file_type, "duration": p.duration,
-            "cover_image": p.cover_image, "views": p.views,
-            "created_at": p.created_at.isoformat(),
-            "category": {"id": p.category.id, "name": p.category.name, "icon": p.category.icon} if p.category else None
-        }
-    return {"items": [fmt(p) for p in posts], "total": total, "page": page,
+    return {"items": [fmt_post(p, user=user, db=db) for p in posts], "total": total, "page": page,
             "total_pages": max(1, (total + 19) // 20)}
 
 
 @app.get("/api/posts/{post_id}")
-def get_post(post_id: int, request: Request, db: Session = Depends(get_db)):
+def get_post(post_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(optional_user)):
     p = db.query(Post).filter(Post.id == post_id).first()
     if not p:
         raise HTTPException(404)
     if should_count_view(post_id, request.client.host):
         p.views += 1
         db.commit()
-    return {
-        "id": p.id, "title": p.title, "description": p.description,
-        "file_path": p.file_path, "file_type": p.file_type,
-        "file_size": p.file_size, "duration": p.duration,
-        "cover_image": p.cover_image, "views": p.views,
-        "created_at": p.created_at.isoformat(),
-        "category": {"id": p.category.id, "name": p.category.name, "icon": p.category.icon} if p.category else None
-    }
+    d = fmt_post(p, user=user, db=db)
+    d.update({
+        "description": p.description,
+        "file_path": p.file_path,
+        "file_size": p.file_size,
+    })
+    return d
 
 
 # ─── Upload / Delete (auth required) ───
@@ -341,7 +366,7 @@ def get_post(post_id: int, request: Request, db: Session = Depends(get_db)):
 async def create_post(
     title: str = Form(...), description: str = Form(""), category_id: int = Form(...),
     file: UploadFile = File(...), cover: UploadFile = File(None),
-    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    user: User = Depends(require_creator), db: Session = Depends(get_db)
 ):
     ext = os.path.splitext(file.filename or "")[1].lower()
     file_type = next((ft for ft, exts in ALLOWED_EXTS.items() if ext in exts), None)
@@ -386,7 +411,8 @@ async def create_post(
 
     post = Post(title=title.strip(), description=description.strip(),
                 file_path=url, file_type=file_type, file_size=info["size"],
-                duration=info["duration"], cover_image=cover_url, category_id=category_id)
+                duration=info["duration"], cover_image=cover_url,
+                category_id=category_id, user_id=user.id)
     db.add(post)
     db.commit()
     db.refresh(post)
@@ -398,6 +424,8 @@ def delete_post(post_id: int, user: User = Depends(get_current_user), db: Sessio
     p = db.query(Post).filter(Post.id == post_id).first()
     if not p:
         raise HTTPException(404)
+    if user.role != "admin" and p.user_id != user.id:
+        raise HTTPException(403, "无权限删除此内容")
     abs_path = os.path.join(MEDIA_DIR, *p.file_path.split("/")[1:])
     if os.path.exists(abs_path):
         os.remove(abs_path)
@@ -408,6 +436,186 @@ def delete_post(post_id: int, user: User = Depends(get_current_user), db: Sessio
     db.delete(p)
     db.commit()
     return {"ok": True}
+
+
+# ─── Favorites (PRD-001) ───
+@app.post("/api/posts/{post_id}/favorite")
+def toggle_favorite(post_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    fav = db.query(UserFavorite).filter(
+        UserFavorite.post_id == post_id, UserFavorite.user_id == user.id
+    ).first()
+    if fav:
+        db.delete(fav)
+        favorited = False
+    else:
+        fav = UserFavorite(user_id=user.id, post_id=post_id)
+        db.add(fav)
+        favorited = True
+    db.commit()
+    count = db.query(UserFavorite).filter(UserFavorite.post_id == post_id).count()
+    return {"favorited": favorited, "count": count}
+
+
+@app.get("/api/me/favorites")
+def my_favorites(
+    category_id: int = Query(None), search: str = Query(None),
+    sort: str = Query("time"), page: int = Query(1, ge=1),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    q = db.query(Post).join(UserFavorite, UserFavorite.post_id == Post.id).filter(
+        UserFavorite.user_id == user.id
+    )
+    if category_id:
+        q = q.filter(Post.category_id == category_id)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(or_(Post.title.ilike(like), Post.description.ilike(like)))
+    if sort == "popular":
+        q = q.order_by(desc(Post.views))
+    elif sort == "latest":
+        q = q.order_by(desc(Post.created_at))
+    else:
+        q = q.order_by(desc(UserFavorite.created_at))
+    total = q.count()
+    posts = q.offset((page - 1) * 20).limit(20).all()
+    return {"items": [fmt_post(p, user=user, db=db) for p in posts], "total": total, "page": page,
+            "total_pages": max(1, (total + 19) // 20)}
+
+
+# ─── Play History (PRD-002) ───
+@app.post("/api/posts/{post_id}/heartbeat")
+def play_heartbeat(
+    post_id: int, data: dict,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    position = float(data.get("position", 0))
+    duration = float(data.get("duration", 0))
+    rec = db.query(PlayHistory).filter(
+        PlayHistory.user_id == user.id, PlayHistory.post_id == post_id
+    ).first()
+    if rec:
+        rec.position = position
+        rec.duration = duration
+    else:
+        rec = PlayHistory(user_id=user.id, post_id=post_id, position=position, duration=duration)
+        db.add(rec)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/me/history")
+def my_history(
+    page: int = Query(1, ge=1), category_id: int = Query(None),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    q = db.query(Post).join(PlayHistory, PlayHistory.post_id == Post.id).filter(
+        PlayHistory.user_id == user.id
+    )
+    if category_id:
+        q = q.filter(Post.category_id == category_id)
+    q = q.order_by(desc(PlayHistory.played_at))
+    total = q.count()
+    posts = q.offset((page - 1) * 20).limit(20).all()
+    items = []
+    for p in posts:
+        d = fmt_post(p, user=user, db=db)
+        h = db.query(PlayHistory).filter(
+            PlayHistory.user_id == user.id, PlayHistory.post_id == p.id
+        ).first()
+        d["position"] = h.position if h else 0
+        d["duration"] = h.duration if h and h.duration else p.duration
+        d["played_at"] = h.played_at.isoformat() if h else None
+        items.append(d)
+    return {"items": items, "total": total, "page": page,
+            "total_pages": max(1, (total + 19) // 20)}
+
+
+@app.delete("/api/me/history/{post_id}")
+def delete_history_item(post_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    h = db.query(PlayHistory).filter(
+        PlayHistory.user_id == user.id, PlayHistory.post_id == post_id
+    ).first()
+    if h:
+        db.delete(h)
+        db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/me/history")
+def clear_history(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    db.query(PlayHistory).filter(PlayHistory.user_id == user.id).delete()
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/posts/{post_id}/resume")
+def get_resume(post_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    h = db.query(PlayHistory).filter(
+        PlayHistory.user_id == user.id, PlayHistory.post_id == post_id
+    ).first()
+    if not h or h.duration <= 0 or h.position < 15:
+        return {"position": 0}
+    if h.position / h.duration >= 0.95:
+        return {"position": 0}
+    return {"position": h.position, "duration": h.duration}
+
+
+# ─── Edit Post (PRD-003) ───
+@app.put("/api/posts/{post_id}")
+async def update_post(
+    post_id: int,
+    title: str = Form(None), description: str = Form(None), category_id: int = Form(None),
+    cover: UploadFile = File(None),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    p = db.query(Post).filter(Post.id == post_id).first()
+    if not p:
+        raise HTTPException(404, "内容不存在")
+    if user.role != "admin" and p.user_id != user.id:
+        raise HTTPException(403, "无权限编辑此内容")
+    if title is not None:
+        title = title.strip()
+        if not title:
+            raise HTTPException(400, "标题不能为空")
+        if len(title) > 200:
+            raise HTTPException(400, "标题过长")
+        p.title = title
+    if description is not None:
+        p.description = description.strip()
+    if category_id is not None:
+        cat = db.query(Category).filter(Category.id == category_id).first()
+        if not cat:
+            raise HTTPException(400, "分类不存在")
+        p.category_id = category_id
+    if cover and cover.filename:
+        ce = os.path.splitext(cover.filename)[1].lower()
+        if ce not in ALLOWED_EXTS['image']:
+            raise HTTPException(400, "封面格式不支持")
+        fid = uuid.uuid4().hex
+        cf = f"{fid}_cover{ce}"
+        cover_path = os.path.join(MEDIA_DIR, "covers", cf)
+        with open(cover_path, "wb") as f:
+            f.write(await cover.read())
+        compress_image(cover_path)
+        old_cover = p.cover_image
+        p.cover_image = f"media/covers/{cf}"
+        if old_cover:
+            cp = os.path.join(MEDIA_DIR, "covers", os.path.basename(old_cover))
+            if os.path.exists(cp):
+                try:
+                    os.remove(cp)
+                except:
+                    pass
+    p.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(p)
+    return {"id": p.id, "title": p.title, "ok": True}
 
 
 # ─── Frontend SPA ───

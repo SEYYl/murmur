@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, ForeignKey, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, ForeignKey, Boolean, UniqueConstraint, Index
 from sqlalchemy.orm import declarative_base, relationship, Session
 from datetime import datetime, timezone
 import os
@@ -23,7 +23,12 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    role = Column(String(20), default="user")
+    status = Column(String(20), default="active")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_login_at = Column(DateTime, nullable=True)
+    posts = relationship("Post", back_populates="user")
+    favorites = relationship("UserFavorite", back_populates="user", cascade="all, delete-orphan")
 
 
 class Category(Base):
@@ -46,9 +51,38 @@ class Post(Base):
     duration = Column(Float, default=0)
     cover_image = Column(String(255), default="")
     category_id = Column(Integer, ForeignKey("categories.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     views = Column(Integer, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     category = relationship("Category", back_populates="posts")
+    user = relationship("User", back_populates="posts")
+    favorites = relationship("UserFavorite", back_populates="post", cascade="all, delete-orphan")
+
+
+class UserFavorite(Base):
+    __tablename__ = "user_favorites"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    user = relationship("User", back_populates="favorites")
+    post = relationship("Post", back_populates="favorites")
+    __table_args__ = (UniqueConstraint("user_id", "post_id", name="uq_user_post_fav"),)
+
+
+class PlayHistory(Base):
+    __tablename__ = "play_history"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    position = Column(Float, default=0)
+    duration = Column(Float, default=0)
+    played_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        UniqueConstraint("user_id", "post_id", name="uq_user_post_history"),
+        Index("ix_history_user_played", "user_id", "played_at"),
+    )
 
 
 def init_db():
@@ -63,9 +97,18 @@ def init_db():
         ]:
             session.add(Category(name=name, icon=icon, sort_order=order))
         session.commit()
-    if not session.query(User).filter(User.username == "admin").first():
+    admin_user = session.query(User).filter(User.username == "admin").first()
+    if not admin_user:
         from backend.auth import hash_password
-        session.add(User(username="admin", password_hash=hash_password("admin123")))
+        session.add(User(username="admin", password_hash=hash_password("admin123"), role="admin"))
+        session.commit()
+    else:
+        if admin_user.role != "admin":
+            admin_user.role = "admin"
+            session.commit()
+    if session.query(Post).filter(Post.user_id.is_(None)).first() is not None:
+        aid = session.query(User).filter(User.username == "admin").first().id
+        session.query(Post).filter(Post.user_id.is_(None)).update({"user_id": aid})
         session.commit()
     session.close()
 
