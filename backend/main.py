@@ -1510,6 +1510,30 @@ def related_posts(post_id: int, limit: int = Query(6, ge=1, le=20),
     return {"items": [fmt_post(p, user, db) for p in posts[:limit]]}
 
 
+# ─── Post Stats (PRD-021) ───
+@app.get("/api/posts/{post_id}/stats")
+def post_stats(post_id: int, db: Session = Depends(get_db)):
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(404, "内容不存在")
+    from sqlalchemy import func as _f
+    sessions = db.query(PlaySession).filter(PlaySession.post_id == post_id).all()
+    session_count = len(sessions)
+    total_play_seconds = sum(s.played_seconds for s in sessions) if sessions else 0
+    avg_completion = (
+        sum(s.completion_ratio for s in sessions) / session_count
+        if session_count > 0 else 0
+    )
+    return {
+        "session_count": session_count,
+        "total_play_time": total_play_seconds,
+        "total_play_seconds": total_play_seconds,
+        "avg_completion": avg_completion,
+        "completion_rate": avg_completion,
+        "play_count": post.views,
+    }
+
+
 # ─── Featured (PRD-011) ───
 @app.put("/api/admin/posts/{post_id}/featured")
 def set_featured(post_id: int, data: dict, admin: User = Depends(require_admin),
