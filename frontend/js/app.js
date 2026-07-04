@@ -1900,8 +1900,42 @@ async function renderAdminSettings() {
         <div>音频格式: ${esc(s.allowed_audio_exts||'')}</div>
       </div>
     </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--rs);padding:20px;margin-bottom:16px">
+      <h2 style="font-size:.95rem;margin-bottom:14px">💾 存储设置</h2>
+      <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">存储后端</span>
+        <select id="set-storage_backend" onchange="updateStorageFormVisibility()" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px">
+          <option value="local" ${s.storage_backend==='local'?'selected':''}>本地存储（默认）</option>
+          <option value="s3" ${s.storage_backend==='s3'?'selected':''}>S3 兼容存储</option>
+        </select></label>
+      <div id="s3-config-section" style="${s.storage_backend==='s3'?'':'display:none'}">
+        <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">存储服务提供商</span>
+          <select id="set-storage_provider" onchange="updateStorageProviderHint()" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px">
+            <option value="aws" ${s.storage_provider==='aws'?'selected':''}>AWS S3</option>
+            <option value="aliyun" ${s.storage_provider==='aliyun'?'selected':''}>阿里云 OSS</option>
+            <option value="minio" ${s.storage_provider==='minio'?'selected':''}>MinIO</option>
+            <option value="custom" ${s.storage_provider==='custom'||!s.storage_provider?'selected':''}>自定义 S3 兼容</option>
+          </select></label>
+        <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">Region（区域）</span>
+          <input id="set-s3_region" value="${esc(s.s3_region||'')}" placeholder="us-east-1 / oss-cn-hangzhou 等" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px">
+          <div id="storage-region-hint" style="font-size:.72rem;color:var(--text3);margin-top:4px"></div></label>
+        <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">Endpoint（端点，MinIO/自定义必填）</span>
+          <input id="set-s3_endpoint" value="${esc(s.s3_endpoint||'')}" placeholder="http://minio:9000" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+        <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">Bucket（存储桶）</span>
+          <input id="set-s3_bucket" value="${esc(s.s3_bucket||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+        <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">Access Key</span>
+          <input id="set-s3_access_key" value="${esc(s.s3_access_key||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+        <label style="display:block;margin-bottom:12px"><span style="font-size:.8rem;color:var(--text3)">Secret Key</span>
+          <input id="set-s3_secret_key" type="password" value="${esc(s.s3_secret_key||'')}" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--rs);padding:8px 12px;color:var(--text);font-size:.85rem;margin-top:4px"></label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button type="button" class="btn" onclick="testStorageConnection()" style="flex:1">🔌 测试连接</button>
+          <button type="button" class="btn" onclick="migrateStorage()" style="flex:1">⬆️ 迁移本地文件到 S3</button>
+        </div>
+        <div id="storage-test-result" style="font-size:.8rem;padding:8px 12px;border-radius:var(--rs);background:var(--bg3);color:var(--text3);min-height:20px"></div>
+      </div>
+    </div>
     ${s._secret_key_is_default==='true'?'<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:var(--rs);padding:12px 16px;margin-bottom:16px;font-size:.8rem;color:#92400e">⚠️ 安全提示：当前使用默认 SECRET_KEY，请通过环境变量 <code>MURMUR_SECRET_KEY</code> 修改后再部署到生产环境</div>':''}
     <button class="btn btn-primary" onclick="saveSettings()" style="width:100%">💾 保存设置</button>`;
+  updateStorageProviderHint();
 }
 
 async function saveSettings() {
@@ -1912,10 +1946,62 @@ async function saveSettings() {
     registration_enabled: $('set-registration_enabled').checked?'true':'false',
     default_user_role: $('set-default_user_role').value,
     max_upload_size_mb: $('set-max_upload_size_mb').value,
+    storage_backend: $('set-storage_backend').value,
+    storage_provider: $('set-storage_provider').value,
+    s3_endpoint: $('set-s3_endpoint').value,
+    s3_bucket: $('set-s3_bucket').value,
+    s3_access_key: $('set-s3_access_key').value,
+    s3_secret_key: $('set-s3_secret_key').value,
+    s3_region: $('set-s3_region').value,
   };
   const r = await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(data)});
   if(r?.ok){toast('✅ 设置已保存','success');renderAdminSettings();}
   else toast(r?.detail||'保存失败','error');
+}
+
+function updateStorageFormVisibility() {
+  const be = $('set-storage_backend')?.value || 'local';
+  const sec = $('s3-config-section');
+  if(sec) sec.style.display = (be === 's3') ? 'block' : 'none';
+  updateStorageProviderHint();
+}
+
+function updateStorageProviderHint() {
+  const prov = $('set-storage_provider')?.value || 'custom';
+  const hint = $('storage-region-hint');
+  if(!hint) return;
+  const hintMap = {
+    aws: '如 us-east-1, us-west-2, ap-northeast-1',
+    aliyun: '如 oss-cn-hangzhou, oss-cn-beijing, oss-cn-shenzhen',
+    minio: 'MinIO 通常不需要 Region，留空即可',
+    custom: '服务支持 region 则填写，否则留空',
+  };
+  hint.textContent = hintMap[prov] || '';
+}
+
+async function testStorageConnection() {
+  const box = $('storage-test-result');
+  if(box) box.textContent = '⏳ 正在测试...';
+  const r = await api('/api/admin/storage/test', {method:'POST'});
+  if(!box) return;
+  if(r?.ok){
+    const d = r.details || {};
+    box.style.color = 'var(--success,#10b981)';
+    box.textContent = `✅ 连接成功（${d.provider||d.backend||'s3'}）bucket=${d.bucket||''}  region=${d.region||''}  对象采样=${d.object_count_sample??'N/A'}`;
+  } else {
+    box.style.color = 'var(--danger,#ef4444)';
+    box.textContent = `❌ 连接失败：${r?.error||'未知错误'}`;
+  }
+}
+
+async function migrateStorage() {
+  if(!confirm('确定要将本地媒体文件迁移到 S3 吗？已有文件会被覆盖。')) return;
+  const r = await api('/api/admin/storage/migrate', {method:'POST'});
+  if(r?.migrated !== undefined){
+    toast(`迁移完成：成功 ${r.migrated} 个，失败 ${r.failed} 个`, r.failed > 0 ? 'warning' : 'success');
+  } else {
+    toast(r?.detail||'迁移失败','error');
+  }
 }
 
 // ─── Sleep Timer ───

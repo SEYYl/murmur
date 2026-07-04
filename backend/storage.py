@@ -2,12 +2,49 @@
 
 Provides a uniform interface for reading/writing media files across different
 storage backends (local filesystem, S3-compatible object storage).
+
+Supported S3-compatible providers:
+  - aws       : Amazon S3 (virtual-hosted style)
+  - aliyun    : 阿里云 OSS (virtual-hosted style)
+  - minio     : MinIO (path style)
+  - custom    : 自定义 S3 兼容服务
 """
 import os
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from backend.models import MEDIA_DIR
+
+
+# Provider presets: auto-fill endpoint/region/path_style for common S3-compatible services.
+# "endpoint_tpl" uses {region} and {bucket} placeholders for per-region services.
+S3_PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
+    "aws": {
+        "label": "AWS S3",
+        "endpoint_tpl": "https://s3.{region}.amazonaws.com",
+        "region_required": True,
+        "path_style": False,
+    },
+    "aliyun": {
+        "label": "阿里云 OSS",
+        "endpoint_tpl": "https://oss-{region}.aliyuncs.com",
+        "region_required": True,
+        "region_hint": "例如 oss-cn-hangzhou",
+        "path_style": False,
+    },
+    "minio": {
+        "label": "MinIO",
+        "endpoint_tpl": "",  # user provides full endpoint (e.g. http://minio:9000)
+        "region_required": False,
+        "path_style": True,
+    },
+    "custom": {
+        "label": "自定义 S3 兼容",
+        "endpoint_tpl": "",  # user provides full endpoint
+        "region_required": False,
+        "path_style": True,  # most self-hosted S3 services use path style
+    },
+}
 
 
 class StorageBackend(ABC):
@@ -52,6 +89,14 @@ class StorageBackend(ABC):
     @abstractmethod
     def backend_name(self) -> str:
         """Return backend identifier: 'local' or 's3'."""
+
+    @abstractmethod
+    def provider(self) -> str:
+        """Return provider identifier: 'local', 'aws', 'aliyun', 'minio', 'custom'."""
+
+    def test_connection(self) -> dict:
+        """Test if the storage backend is reachable. Returns {ok, error, details}."""
+        return {"ok": False, "error": "not implemented", "details": {}}
 
 
 class LocalStorage(StorageBackend):
@@ -124,6 +169,24 @@ class LocalStorage(StorageBackend):
     def backend_name(self) -> str:
         return "local"
 
+    def provider(self) -> str:
+        return "local"
+
+    def test_connection(self) -> dict:
+        try:
+            total_bytes = 0
+            for root, _, files in os.walk(MEDIA_DIR):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    if os.path.isfile(fp):
+                        total_bytes += os.path.getsize(fp)
+            return {"ok": True, "details": {
+                "media_dir": MEDIA_DIR,
+                "total_bytes": total_bytes,
+            }}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "details": {}}
+
 
 class S3Storage(StorageBackend):
     """S3-compatible object storage backend.
@@ -132,7 +195,8 @@ class S3Storage(StorageBackend):
     clear ImportError so callers can fall back to LocalStorage.
     """
 
-    def __init__(self, endpoint: str, bucket: str, access_key: str, secret_key: str, region: str = ""):
+    def __init__(self, endpoint: str, bucket: str, access_key: str, secret_key: str,
+                 region: str = "", provider: str = "custom", use_path_style: bool = False):
         try:
             import boto3  # type: ignore
         except ImportError as e:
@@ -141,14 +205,22 @@ class S3Storage(StorageBackend):
             ) from e
         self._bucket = bucket
         self._endpoint = endpoint
+        self._region = region
+        self._provider = provider if provider in S3_PROVIDER_PRESETS else "custom"
+        self._path_style = use_path_style
         client_kwargs = {
             "endpoint_url": endpoint or None,
             "aws_access_key_id": access_key,
             "aws_secret_access_key": secret_key,
+            "config": None,
         }
         if region:
             client_kwargs["region_name"] = region
-        self._s3 = boto3.client("s3", **client_kwargs)
+        # Build boto3 config with path style if needed (MinIO etc.)
+        if use_path_style:
+            from botocore.config import Config  # type: ignore
+            client_kwargs["config"] = Config(s3={"addressing_style": "path"})
+        self._s3 = boto3.client("s3", **{k: v for k, v in client_kwargs.items() if v is not None})
 
     def _key(self, path: str) -> str:
         if path.startswith("media/"):
@@ -215,23 +287,81 @@ class S3Storage(StorageBackend):
     def backend_name(self) -> str:
         return "s3"
 
+    def provider(self) -> str:
+        return self._provider
+
+    def test_connection(self) -> dict:
+        """Test S3 connectivity by listing objects in the bucket."""
+        try:
+            resp = self._s3.list_objects_v2(Bucket=self._bucket, MaxKeys=1)
+            keys = resp.get("KeyCount", 0)
+            location = ""
+            try:
+                loc_resp = self._s3.get_bucket_location(Bucket=self._bucket)
+                location = loc_resp.get("LocationConstraint", "") or ""
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "details": {
+                    "bucket": self._bucket,
+                    "endpoint": self._endpoint,
+                    "provider": self._provider,
+                    "path_style": self._path_style,
+                    "region": self._region or location,
+                    "object_count_sample": keys,
+                },
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e), "details": {
+                "bucket": self._bucket,
+                "endpoint": self._endpoint,
+                "provider": self._provider,
+                "path_style": self._path_style,
+            }}
+
 
 _storage_instance: Optional[StorageBackend] = None
-_storage_backend_name: Optional[str] = None
+_storage_cache_key: Optional[str] = None
+
+
+def _build_s3_endpoint(provider: str, region: str, endpoint: str) -> str:
+    """Build the S3 endpoint URL based on provider preset.
+
+    For aws/aliyun the endpoint is derived from region via the template.
+    For minio/custom the user-provided endpoint is used as-is.
+    """
+    preset = S3_PROVIDER_PRESETS.get(provider, S3_PROVIDER_PRESETS["custom"])
+    tpl = preset.get("endpoint_tpl", "")
+    if tpl and region:
+        return tpl.format(region=region)
+    return endpoint or ""
 
 
 def get_storage(db=None) -> StorageBackend:
     """Return the configured storage backend instance (cached).
 
-    Reads `storage_backend` from system settings. Falls back to LocalStorage
-    if S3 is requested but boto3 is not installed or misconfigured.
+    Reads storage_backend and storage_provider from system settings.
+    Falls back to LocalStorage if S3 is requested but boto3 is not installed
+    or configuration is incomplete.
     """
-    global _storage_instance, _storage_backend_name
+    global _storage_instance, _storage_cache_key
 
     from backend.main import get_setting  # local import to avoid cycle
-    backend_name = (get_setting("storage_backend", "local", db=db) or "local").lower()
 
-    if _storage_instance is not None and _storage_backend_name == backend_name:
+    backend_name = (get_setting("storage_backend", "local", db=db) or "local").lower()
+    provider = (get_setting("storage_provider", "custom", db=db) or "custom").lower()
+
+    # Cache key includes both backend and provider (and relevant S3 config) so
+    # that changing settings causes a fresh instance on next call.
+    cache_key = f"{backend_name}:{provider}"
+    if backend_name == "s3":
+        # Include enough config to detect meaningful changes.
+        region = get_setting("s3_region", "", db=db)
+        bucket = get_setting("s3_bucket", "", db=db)
+        cache_key = f"{backend_name}:{provider}:{region}:{bucket}"
+
+    if _storage_instance is not None and _storage_cache_key == cache_key:
         return _storage_instance
 
     if backend_name == "s3":
@@ -239,28 +369,56 @@ def get_storage(db=None) -> StorageBackend:
         bucket = get_setting("s3_bucket", "", db=db)
         access_key = get_setting("s3_access_key", "", db=db)
         secret_key = get_setting("s3_secret_key", "", db=db)
+        region = get_setting("s3_region", "", db=db)
         if not bucket:
             # Misconfigured; fall back to local
             _storage_instance = LocalStorage()
-            _storage_backend_name = "local"
+            _storage_cache_key = "local"
             return _storage_instance
+        # Resolve endpoint from provider preset
+        effective_endpoint = _build_s3_endpoint(provider, region, endpoint)
+        # Determine path style from preset
+        preset = S3_PROVIDER_PRESETS.get(provider, S3_PROVIDER_PRESETS["custom"])
+        use_path_style = bool(preset.get("path_style", False))
         try:
-            _storage_instance = S3Storage(endpoint, bucket, access_key, secret_key)
-            _storage_backend_name = "s3"
+            _storage_instance = S3Storage(
+                endpoint=effective_endpoint,
+                bucket=bucket,
+                access_key=access_key,
+                secret_key=secret_key,
+                region=region,
+                provider=provider,
+                use_path_style=use_path_style,
+            )
+            _storage_cache_key = cache_key
             return _storage_instance
         except ImportError:
             # boto3 not installed; fall back to local
             _storage_instance = LocalStorage()
-            _storage_backend_name = "local"
+            _storage_cache_key = "local"
             return _storage_instance
 
     _storage_instance = LocalStorage()
-    _storage_backend_name = "local"
+    _storage_cache_key = "local"
     return _storage_instance
 
 
 def reset_storage_cache():
     """Reset the cached storage instance (used when settings change)."""
-    global _storage_instance, _storage_backend_name
+    global _storage_instance, _storage_cache_key
     _storage_instance = None
-    _storage_backend_name = None
+    _storage_cache_key = None
+
+
+def get_provider_presets() -> dict:
+    """Return S3 provider preset metadata for the frontend settings form."""
+    result = {}
+    for key, preset in S3_PROVIDER_PRESETS.items():
+        result[key] = {
+            "label": preset.get("label", key),
+            "region_required": preset.get("region_required", False),
+            "region_hint": preset.get("region_hint", ""),
+            "path_style": preset.get("path_style", False),
+            "endpoint_tpl": preset.get("endpoint_tpl", ""),
+        }
+    return result

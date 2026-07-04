@@ -208,10 +208,12 @@ DEFAULT_SETTINGS = {
     "rss_enabled": "true",
     # PRD-019: multi storage backend
     "storage_backend": "local",
+    "storage_provider": "custom",
     "s3_endpoint": "",
     "s3_bucket": "",
     "s3_access_key": "",
     "s3_secret_key": "",
+    "s3_region": "",
     # PRD-020: sensitive words (comma separated)
     "sensitive_words": "",
 }

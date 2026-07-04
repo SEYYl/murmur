@@ -16,7 +16,7 @@ from backend.models import (
     Comment, Subtitle, Report, PlaySession, MEDIA_DIR, UPLOAD_DIR, ALLOWED_EXTS,
 )
 from backend.auth import hash_password, verify_password, create_access_token, get_current_user, require_creator, require_admin, get_token
-from backend.storage import get_storage, reset_storage_cache, LocalStorage
+from backend.storage import get_storage, reset_storage_cache, LocalStorage, get_provider_presets
 
 
 # ─── Storage helpers (PRD-019) ───
@@ -1024,7 +1024,7 @@ def update_admin_settings(data: dict, admin: User = Depends(require_admin), db: 
     for k, v in data.items():
         if k not in allowed:
             continue
-        if k.startswith(("storage_backend", "s3_")):
+        if k.startswith(("storage_", "s3_")):
             storage_keys_touched = True
         row = db.query(SystemSetting).filter(SystemSetting.key == k).first()
         if row:
@@ -1845,12 +1845,13 @@ def transcode_status(admin: User = Depends(require_admin), db: Session = Depends
 # ─── PRD-019: Storage Management ───
 @app.get("/api/admin/storage/status")
 def storage_status(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    """Return current storage backend info and file counts."""
+    """Return current storage backend info, provider, and file counts."""
     try:
         storage = get_storage(db=db)
         backend = storage.backend_name()
+        provider = storage.provider()
     except Exception as e:
-        return {"backend": "error", "error": str(e)}
+        return {"backend": "error", "provider": "", "error": str(e)}
     # Count local files (always available)
     counts = {}
     for subdir in ["audio", "video", "covers", "subtitles"]:
@@ -1861,9 +1862,25 @@ def storage_status(admin: User = Depends(require_admin), db: Session = Depends(g
             counts[subdir] = 0
     return {
         "backend": backend,
+        "provider": provider,
         "local_counts": counts,
         "s3_configured": bool(get_setting("s3_bucket", "", db=db)),
+        "presets": get_provider_presets(),
+        "provider_value": get_setting("storage_provider", "custom", db=db),
     }
+
+
+@app.post("/api/admin/storage/test")
+def storage_test(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Test the configured storage backend connectivity."""
+    try:
+        storage = get_storage(db=db)
+        result = storage.test_connection()
+        return result
+    except ImportError as e:
+        return {"ok": False, "error": str(e), "details": {}}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "details": {}}
 
 
 @app.post("/api/admin/storage/migrate")
