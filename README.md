@@ -117,6 +117,22 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 > export ASMR_SECRET_KEY="your-secret-key-here"
 > ```
 
+### 初始化示例数据
+
+媒体文件（音频、封面）和数据库文件不会提交到 Git。首次部署后可使用内置脚本快速生成示例内容：
+
+```bash
+# 启动服务器后，在另一个终端运行
+python scripts/setup_audio.py
+```
+
+脚本会自动完成：
+1. 清除现有内容（如有）
+2. 生成 16 个合成 ASMR 音频（白噪音、棕噪音、双耳节拍、敲击音、正弦波等）
+3. 按 8 个分类各上传 2 个内容（共 16 个）
+
+> **注意**：生成的是合成音频（WAV 格式），仅用于演示。正式使用请上传真实的 ASMR 内容。
+
 ## 系统配置
 
 所有配置均可在管理后台「系统设置」页可视化修改，以下为关键配置说明：
@@ -192,6 +208,8 @@ murmur/
 │   │   └── i18n.js      # 国际化引擎
 │   │   └── i18n/        # 语言包（zh-CN.json, en-US.json）
 │   └── css/style.css    # 主题系统 + 完整 UI 样式
+├── scripts/             # 工具脚本
+│   └── setup_audio.py   # 示例音频批量生成与上传
 ├── media/               # 媒体文件存储
 │   ├── audio/           # 音频文件
 │   ├── video/           # 视频文件
