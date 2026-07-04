@@ -1461,7 +1461,7 @@ function showManualAddForm() {
   if (qs('.manual-add-modal')) return;
   api('/api/categories').then(cats => {
     const o = document.createElement('div'); o.className = 'auth-modal manual-add-modal';
-    o.innerHTML = `<div class="auth-box" style="max-width:520px">
+    o.innerHTML = `<div class="auth-box" style="max-width:540px">
       <h2>➕ 手动添加内容</h2>
       <p style="font-size:.8rem;color:var(--text3);margin-bottom:16px">
         适用于已直接上传到 R2/S3 的大文件，跳过服务器上传和转码
@@ -1482,10 +1482,15 @@ function showManualAddForm() {
           <option value="video">🎬 视频</option>
         </select></div>
       <div class="input-group"><label>R2 文件路径 *</label>
-        <input id="ma-key" class="form-input" placeholder="如: audio/myfile.mp4 或 video/bigfile.mp4">
-        <div class="form-hint">在 R2 控制台复制文件的完整路径（含子目录），例如 audio/rain.mp3</div></div>
+        <div style="display:flex;gap:6px">
+          <input id="ma-key" class="form-input" style="flex:1" placeholder="如: audio/myfile.mp3">
+          <button type="button" class="btn btn-secondary" onclick="showStorageBrowser('file')" style="white-space:nowrap">📂 浏览</button>
+        </div></div>
       <div class="input-group"><label>封面路径（可选）</label>
-        <input id="ma-cover" class="form-input" placeholder="如: covers/thumb.jpg（留空则无封面）"></div>
+        <div style="display:flex;gap:6px">
+          <input id="ma-cover" class="form-input" style="flex:1" placeholder="如: covers/thumb.jpg">
+          <button type="button" class="btn btn-secondary" onclick="showStorageBrowser('cover')" style="white-space:nowrap">📂 浏览</button>
+        </div></div>
       <div class="input-group" style="display:flex;gap:8px">
         <div style="flex:1"><label>时长（秒，可选）</label>
           <input id="ma-duration" class="form-input" type="number" min="0" step="1" placeholder="0"></div>
@@ -1516,7 +1521,7 @@ async function submitManualAdd() {
     data.append('duration', parseFloat($('ma-duration').value) || 0);
     data.append('file_size', parseInt($('ma-size').value) || 0);
     if (!data.get('title')) { toast('请输入标题', 'error'); if(btn){btn.disabled=false;btn.textContent='✅ 保存'} return; }
-    if (!data.get('r2_key')) { toast('请输入 R2 文件路径', 'error'); if(btn){btn.disabled=false;btn.textContent='✅ 保存'} return; }
+    if (!data.get('r2_key')) { toast('请选择或输入 R2 文件路径', 'error'); if(btn){btn.disabled=false;btn.textContent='✅ 保存'} return; }
     const r = await api('/api/admin/posts/manual', { method: 'POST', body: data });
     if (r?.id) {
       toast('✅ 内容已添加！', 'success');
@@ -1530,6 +1535,120 @@ async function submitManualAdd() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '✅ 保存'; }
   }
+}
+
+/* ─── R2 File Browser ─── */
+let _sbPrefix = '';
+let _sbTarget = 'file';  // 'file' or 'cover'
+
+function showStorageBrowser(target) {
+  if (qs('.storage-browser-modal')) return;
+  _sbPrefix = '';
+  _sbTarget = target;
+  renderStorageBrowser();
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0;
+  let s = bytes;
+  while (s >= 1024 && i < u.length - 1) { s /= 1024; i++; }
+  return s.toFixed(1) + ' ' + u[i];
+}
+
+async function renderStorageBrowser() {
+  let container = qs('.storage-browser-modal');
+  const loading = '<div class="loading"><div class="spinner"><span></span><span></span><span></span><span></span><span></span></div></div>';
+  if (!container) {
+    const o = document.createElement('div'); o.className = 'auth-modal storage-browser-modal';
+    o.innerHTML = `<div class="auth-box" style="max-width:700px;min-height:400px">
+      <h2>📂 浏览 R2 文件</h2>
+      <div id="sb-breadcrumb" style="font-size:.82rem;margin-bottom:10px;color:var(--text3)"></div>
+      <div id="sb-content" style="max-height:400px;overflow-y:auto">${loading}</div>
+      <div class="auth-actions" style="margin-top:12px">
+        <button class="btn btn-secondary" onclick="this.closest('.auth-modal').remove()">取消</button>
+      </div>
+    </div>`;
+    document.body.appendChild(o);
+    container = o;
+  }
+  $('sb-content').innerHTML = loading;
+  try {
+    const data = await api(`/api/admin/storage/list?prefix=${encodeURIComponent(_sbPrefix)}&max_keys=200`);
+    renderSbContent(data);
+  } catch (e) {
+    $('sb-content').innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3)">❌ 加载失败: ${e.message || e}</div>`;
+  }
+}
+
+function renderSbContent(data) {
+  const isFileTarget = _sbTarget === 'file';
+  const extFilter = isFileTarget ? null : ['.jpg','.jpeg','.png','.gif','.webp'];
+
+  // Breadcrumb
+  const parts = _sbPrefix ? _sbPrefix.replace(/\/$/, '').split('/') : [];
+  let bcHtml = '<a href="#" onclick="event.preventDefault();navigateSb(\'\')">📦 根目录</a>';
+  let cum = '';
+  for (const p of parts) {
+    cum += p + '/';
+    bcHtml += ` / <a href="#" onclick="event.preventDefault();navigateSb('${cum}')">${p}</a>`;
+  }
+  $('sb-breadcrumb').innerHTML = bcHtml;
+
+  let html = '';
+  // Directories
+  for (const d of (data.dirs || [])) {
+    const name = d.replace(_sbPrefix, '').replace(/\/$/, '');
+    html += `<div class="sb-item sb-dir" onclick="navigateSb('${d}')">
+      <span style="font-size:1.1rem;margin-right:8px">📁</span>
+      <span>${name}/</span>
+    </div>`;
+  }
+  // Files
+  const files = (data.files || []).filter(f => {
+    if (extFilter) {
+      const ext = f.key.toLowerCase().slice(f.key.lastIndexOf('.'));
+      return extFilter.includes(ext);
+    }
+    return true;
+  });
+  for (const f of files) {
+    const name = f.key.replace(_sbPrefix, '');
+    const icon = isFileTarget ? (f.key.match(/\.(mp4|webm|mov|mkv)$/i) ? '🎬' : '🎵') : '🖼️';
+    html += `<div class="sb-item sb-file" onclick="selectSbFile('${f.key.replace(/'/g, "\\'")}')">
+      <span style="font-size:1rem;margin-right:8px">${icon}</span>
+      <span style="flex:1">${name}</span>
+      <span style="font-size:.78rem;color:var(--text3);margin-left:8px">${formatSize(f.size)}</span>
+    </div>`;
+  }
+  if (!html) {
+    html = '<div style="padding:30px;text-align:center;color:var(--text3)">📭 这个目录是空的</div>';
+  }
+  $('sb-content').innerHTML = html;
+}
+
+function navigateSb(prefix) {
+  _sbPrefix = prefix;
+  renderStorageBrowser();
+}
+
+function selectSbFile(key) {
+  const inputId = _sbTarget === 'cover' ? 'ma-cover' : 'ma-key';
+  const el = $(inputId);
+  if (el) el.value = key;
+  // Auto-detect file type from extension
+  if (_sbTarget === 'file') {
+    const typeSel = $('ma-type');
+    if (typeSel) {
+      const ext = key.toLowerCase().slice(key.lastIndexOf('.'));
+      if (['.mp3','.wav','.flac','.m4a','.aac','.ogg'].includes(ext)) typeSel.value = 'audio';
+      else if (['.mp4','.webm','.mov','.mkv'].includes(ext)) typeSel.value = 'video';
+    }
+  }
+  // Close browser
+  qs('.storage-browser-modal')?.remove();
+  toast('✅ 已选择: ' + key.split('/').pop(), 'success');
 }
 
 async function renderAdmin() {

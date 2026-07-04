@@ -105,6 +105,10 @@ class StorageBackend(ABC):
         """Test if the storage backend is reachable. Returns {ok, error, details}."""
         return {"ok": False, "error": "not implemented", "details": {}}
 
+    def list_files(self, prefix: str = "", max_keys: int = 100, delimiter: str = "/") -> dict:
+        """List files in the storage backend. Not supported by LocalStorage."""
+        return {"files": [], "dirs": [], "is_truncated": False}
+
 
 class LocalStorage(StorageBackend):
     """Local filesystem storage backend.
@@ -326,6 +330,45 @@ class S3Storage(StorageBackend):
                 "provider": self._provider,
                 "path_style": self._path_style,
             }}
+
+    def list_files(self, prefix: str = "", max_keys: int = 100, delimiter: str = "/") -> dict:
+        """List files and directories in the S3 bucket under the given prefix.
+
+        Returns a dict with:
+          - files: list of {key, size, last_modified}
+          - dirs: list of common prefixes (subdirectories)
+          - is_truncated: bool
+          - next_token: str (for pagination)
+        """
+        try:
+            kwargs = {
+                "Bucket": self._bucket,
+                "Prefix": prefix,
+                "MaxKeys": max_keys,
+            }
+            if delimiter:
+                kwargs["Delimiter"] = delimiter
+            resp = self._s3.list_objects_v2(**kwargs)
+            files = []
+            for obj in resp.get("Contents", []):
+                key = obj["Key"]
+                if key == prefix:
+                    continue  # skip the directory marker itself
+                files.append({
+                    "key": key,
+                    "size": obj.get("Size", 0),
+                    "last_modified": obj.get("LastModified", "").isoformat() if obj.get("LastModified") else "",
+                    "url": self.url(key),
+                })
+            dirs = [p.get("Prefix", "") for p in resp.get("CommonPrefixes", [])]
+            return {
+                "files": files,
+                "dirs": dirs,
+                "is_truncated": resp.get("IsTruncated", False),
+                "next_token": resp.get("NextContinuationToken", ""),
+            }
+        except Exception as e:
+            return {"error": str(e), "files": [], "dirs": [], "is_truncated": False}
 
 
 _storage_instance: Optional[StorageBackend] = None

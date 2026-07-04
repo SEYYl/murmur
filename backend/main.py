@@ -1907,6 +1907,29 @@ def storage_test(admin: User = Depends(require_admin), db: Session = Depends(get
         return {"ok": False, "error": str(e), "details": {}}
 
 
+@app.get("/api/admin/storage/list")
+def storage_list(
+    prefix: str = Query(""),
+    max_keys: int = Query(100, ge=1, le=1000),
+    admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """List files and directories in the active S3/R2 storage backend.
+
+    Uses delimiter="/" so directories like "audio/", "video/" are grouped.
+    Set prefix to navigate into a directory (e.g. "audio/" to list audio files).
+    """
+    try:
+        storage = get_storage(db=db)
+    except Exception as e:
+        raise HTTPException(500, f"存储后端初始化失败: {e}")
+    if storage.backend_name() != "s3":
+        return {"ok": True, "files": [], "dirs": ["audio/", "video/", "covers/", "subtitles/"], "is_truncated": False, "hint": "当前是本地存储，这些是建议的目录结构"}
+    result = storage.list_files(prefix=prefix, max_keys=max_keys)
+    if "error" in result:
+        raise HTTPException(500, f"列举文件失败: {result['error']}")
+    return result
+
+
 @app.post("/api/admin/storage/migrate")
 def storage_migrate(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Migrate existing local files to the active S3 backend.
