@@ -4,6 +4,12 @@ __pycache__/
 venv/
 env/
 
+# Environment variables (contains secrets — never commit)
+.env
+
+# Ruff cache
+.ruff_cache/
+
 # Database
 data/*.db
 

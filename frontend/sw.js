@@ -1,5 +1,5 @@
 // ─── Murmur Service Worker ───
-const SW_CACHE = 'murmur-v2';
+const SW_CACHE = 'murmur-v18';
 const APP_SHELL = [
   '/',
   '/static/index.html',
@@ -28,7 +28,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// ─── Fetch: stale-while-revalidate ───
+// ─── Fetch: network-first for navigations & static assets, cache-first for media ───
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
@@ -40,7 +40,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Only cache cover images under /media/covers/, skip audio/video (Range requests)
+  // Cover images: cache-first (they don't change often)
   if (url.pathname.startsWith('/media/covers/')) {
     event.respondWith(
       caches.open(SW_CACHE).then((cache) => {
@@ -63,18 +63,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Default: stale-while-revalidate for app shell & static assets
+  // ─── Network-first for HTML, CSS, JS ───
+  // Always try network first so latest code is served; fall back to cache only when offline
   event.respondWith(
-    caches.open(SW_CACHE).then((cache) => {
-      return cache.match(req).then((cached) => {
-        const network = fetch(req).then((res) => {
-          if (res && res.status === 200 && (req.url.startsWith(self.location.origin))) {
-            cache.put(req, res.clone()).catch(() => {});
-          }
-          return res;
-        }).catch(() => cached);
-        return cached || network;
-      });
+    fetch(req).then((res) => {
+      if (res && res.status === 200 && req.url.startsWith(self.location.origin)) {
+        const clone = res.clone();
+        caches.open(SW_CACHE).then((cache) => cache.put(req, clone)).catch(() => {});
+      }
+      return res;
+    }).catch(() => {
+      return caches.match(req).then((cached) => cached || new Response('Offline', { status: 503 }));
     })
   );
 });

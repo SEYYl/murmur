@@ -1,7 +1,20 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, ForeignKey, Boolean, UniqueConstraint, Index
-from sqlalchemy.orm import declarative_base, relationship, Session
-from datetime import datetime, timezone
 import os
+from datetime import UTC, datetime
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy.orm import Session, declarative_base, relationship
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'data', 'asmr.db')}"
@@ -25,7 +38,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(String(20), default="user")
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     last_login_at = Column(DateTime, nullable=True)
     posts = relationship("Post", back_populates="user")
     favorites = relationship("UserFavorite", back_populates="user", cascade="all, delete-orphan")
@@ -54,8 +67,8 @@ class Post(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     views = Column(Integer, default=0)
     featured = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     # PRD-018: async transcode status (processing / ready / failed)
     status = Column(String(20), default="ready")
     # PRD-020: content hash for duplicate detection
@@ -74,7 +87,7 @@ class UserFavorite(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     user = relationship("User", back_populates="favorites")
     post = relationship("Post", back_populates="favorites")
     __table_args__ = (UniqueConstraint("user_id", "post_id", name="uq_user_post_fav"),)
@@ -87,7 +100,7 @@ class PlayHistory(Base):
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
     position = Column(Float, default=0)
     duration = Column(Float, default=0)
-    played_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    played_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     __table_args__ = (
         UniqueConstraint("user_id", "post_id", name="uq_user_post_history"),
         Index("ix_history_user_played", "user_id", "played_at"),
@@ -98,7 +111,7 @@ class SystemSetting(Base):
     __tablename__ = "system_settings"
     key = Column(String(64), primary_key=True)
     value = Column(Text, default="")
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     updated_by = Column(Integer, nullable=True)
 
 
@@ -107,7 +120,7 @@ class Tag(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(64), unique=True, nullable=False, index=True)
     use_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
 
 class PostTag(Base):
@@ -130,8 +143,8 @@ class Playlist(Base):
     cover = Column(String(500), default="")
     is_public = Column(Boolean, default=False)
     item_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
 
 class PlaylistItem(Base):
@@ -140,7 +153,7 @@ class PlaylistItem(Base):
     playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=False, index=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
     position = Column(Integer, default=0)
-    added_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    added_at = Column(DateTime, default=lambda: datetime.now(UTC))
     playlist = relationship("Playlist", back_populates="items")
     post = relationship("Post")
 
@@ -156,7 +169,7 @@ class Comment(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     user = relationship("User")
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
 
 class Subtitle(Base):
@@ -165,7 +178,7 @@ class Subtitle(Base):
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
     language = Column(String(10), default="zh")
     file_path = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
 
 class Report(Base):
@@ -177,7 +190,7 @@ class Report(Base):
     target_id = Column(Integer, nullable=False)
     reason = Column(Text, default="")
     status = Column(String(20), default="pending")  # pending / resolved / dismissed
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     resolved_at = Column(DateTime, nullable=True)
     resolved_by = Column(Integer, nullable=True)
     reporter = relationship("User")
@@ -189,7 +202,7 @@ class PlaySession(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False, index=True)
-    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime, default=lambda: datetime.now(UTC))
     ended_at = Column(DateTime, nullable=True)
     played_seconds = Column(Float, default=0)
     completion_ratio = Column(Float, default=0)
@@ -220,7 +233,7 @@ DEFAULT_SETTINGS = {
 
 
 def _migrate_db():
-    from sqlalchemy import text, inspect
+    from sqlalchemy import inspect, text
     insp = inspect(engine)
     with engine.connect() as conn:
         existing_tables = insp.get_table_names()

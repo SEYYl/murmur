@@ -1,31 +1,69 @@
-from datetime import datetime, timedelta, timezone
-import hashlib, secrets, os
-from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, Request
-from sqlalchemy.orm import Session
-from backend.models import User, Post, get_db
+import hashlib
+import os
+import secrets
+import warnings
+from datetime import UTC, datetime, timedelta
 
-SECRET_KEY = os.getenv("ASMR_SECRET_KEY", "asmr-secret-key-change-me")
+import bcrypt
+from fastapi import Depends, HTTPException, Request
+from jose import JWTError, jwt
+from sqlalchemy.orm import Session
+
+from backend.models import Post, User, get_db
+
+# ─── SECRET_KEY: prefer env var, generate random fallback ───
+_env_key = os.getenv("ASMR_SECRET_KEY")
+SECRET_KEY_IS_DEFAULT = not _env_key or _env_key == "asmr-secret-key-change-me"
+if SECRET_KEY_IS_DEFAULT:
+    SECRET_KEY = secrets.token_urlsafe(32)
+    warnings.warn(
+        "ASMR_SECRET_KEY 环境变量未设置或使用了默认值。已为本会话生成随机密钥，"
+        "但重启后所有已签发的 JWT 将失效。请在环境变量中设置 ASMR_SECRET_KEY。",
+        stacklevel=2,
+    )
+else:
+    SECRET_KEY = _env_key
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30  # 30 days
 
+# Bcrypt cost factor — 12 is a good balance of security vs. latency (~250ms)
+_BCRYPT_ROUNDS = 12
+
 
 def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    h = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"{salt}${h}"
+    """Hash a password using bcrypt with adaptive cost factor."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed: str) -> bool:
+    """Verify a password against a stored hash.
+
+    Supports both bcrypt (current) and legacy SHA256 (salt$hex) formats.
+    Legacy hashes are verified for backward compatibility — callers should
+    check is_legacy_hash() and re-hash if verification succeeds.
+    """
+    # Bcrypt hashes start with $2 (e.g., $2b$12$...)
+    if hashed.startswith("$2"):
+        try:
+            return bcrypt.checkpw(plain_password.encode("utf-8"), hashed.encode("utf-8"))
+        except (ValueError, TypeError):
+            return False
+    # Legacy SHA256 format: salt$hexdigest
     parts = hashed.split("$")
-    if len(parts) != 2:
-        return False
-    salt, h = parts
-    return hashlib.sha256((salt + plain_password).encode()).hexdigest() == h
+    if len(parts) == 2:
+        salt, h = parts
+        return hashlib.sha256((salt + plain_password).encode()).hexdigest() == h
+    return False
+
+
+def is_legacy_hash(hashed: str) -> bool:
+    """Return True if the hash uses the old SHA256 format (needs migration to bcrypt)."""
+    return not hashed.startswith("$2")
 
 
 def create_access_token(data: dict) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {"sub": str(data["sub"]), "exp": expire}
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -47,8 +85,8 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
         if user_id_str is None:
             raise HTTPException(status_code=401, detail="登录已过期")
         user_id = int(user_id_str)
-    except (JWTError, ValueError, TypeError):
-        raise HTTPException(status_code=401, detail="登录已过期")
+    except (JWTError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=401, detail="登录已过期") from exc
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise HTTPException(status_code=401, detail="用户不存在")

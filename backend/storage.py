@@ -11,14 +11,13 @@ Supported S3-compatible providers:
 """
 import os
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Any
 
 from backend.models import MEDIA_DIR
 
-
 # Provider presets: auto-fill endpoint/region/path_style for common S3-compatible services.
 # "endpoint_tpl" uses {region} and {bucket} placeholders for per-region services.
-S3_PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
+S3_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "aws": {
         "label": "AWS S3",
         "endpoint_tpl": "https://s3.{region}.amazonaws.com",
@@ -275,8 +274,7 @@ class S3Storage(StorageBackend):
             Key=self._key(path),
             Range=f"bytes={start}-{end}",
         )
-        for chunk in obj["Body"].iter_chunks(chunk_size=8192 * 16):
-            yield chunk
+        yield from obj["Body"].iter_chunks(chunk_size=8192 * 16)
 
     def size(self, path: str) -> int:
         resp = self._s3.head_object(Bucket=self._bucket, Key=self._key(path))
@@ -310,7 +308,7 @@ class S3Storage(StorageBackend):
             try:
                 loc_resp = self._s3.get_bucket_location(Bucket=self._bucket)
                 location = loc_resp.get("LocationConstraint", "") or ""
-            except Exception:
+            except Exception:  # noqa: S110 - bucket location is informational; ignore failures
                 pass
             return {
                 "ok": True,
@@ -371,8 +369,8 @@ class S3Storage(StorageBackend):
             return {"error": str(e), "files": [], "dirs": [], "is_truncated": False}
 
 
-_storage_instance: Optional[StorageBackend] = None
-_storage_cache_key: Optional[str] = None
+_storage_instance: StorageBackend | None = None
+_storage_cache_key: str | None = None
 
 
 def _build_s3_endpoint(provider: str, region: str, endpoint: str) -> str:
@@ -427,7 +425,7 @@ def get_storage(db=None) -> StorageBackend:
     """
     global _storage_instance, _storage_cache_key
 
-    from backend.main import get_setting  # local import to avoid cycle
+    from backend.utils import get_setting  # local import to avoid cycle
 
     _raw = _s3_env("storage_backend") or get_setting("storage_backend", "local", db=db)
     backend_name = (_raw or "local").lower()

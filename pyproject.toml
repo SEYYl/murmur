@@ -1,0 +1,44 @@
+# ─── Ruff: Linter + Formatter ───
+# 安装：pip install ruff
+# 检查：ruff check backend/
+# 格式化：ruff format backend/
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = ["venv", "__pycache__", "media", "uploads", "data"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (unused imports, undefined names, etc.)
+    "I",    # isort (import sorting)
+    "B",    # flake8-bugbear (common bug patterns)
+    "S",    # flake8-bandit (security)
+    "UP",   # pyupgrade (modernize syntax)
+    "C4",   # flake8-comprehensions
+    "RET",  # flake8-return
+]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "B008",   # do not perform function call in argument defaults (FastAPI Depends pattern)
+    "S101",   # use of assert — needed in tests
+    "S104",   # possible binding to all interfaces (0.0.0.0)
+    "S603",   # subprocess call — already validated with timeout/capture_output
+    "S607",   # partial executable path (ffprobe/ffmpeg)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["S", "E402"]  # scripts may have relaxed security/import rules
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ─── pytest ───
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
